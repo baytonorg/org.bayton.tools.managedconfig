@@ -1,0 +1,23 @@
+<resources>
+    <string-array name="choice_entries">
+        <item>@string/choice_none</item>
+        <item>@string/choice_another</item>
+    </string-array>
+
+    <string-array name="choice_values">
+        <item></item>
+        <item>another</item>
+    </string-array>
+
+    <string-array name="multiselect_entries">
+        <item>@string/multiselect_none</item>
+        <item>@string/multiselect_one</item>
+        <item>@string/multiselect_two</item>
+    </string-array>
+
+    <string-array name="multiselect_values">
+        <item></item>
+        <item>one</item>
+        <item>two</item>
+    </string-array>
+</resources>

@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Managed Config Tool</string>
+    <string name="restriction_bool_title">My BOOL</string>
+    <string name="restriction_bool_description">Boolean baseline managed configuration.</string>
+    <string name="restriction_string_title">My STRING</string>
+    <string name="restriction_string_description">String baseline managed configuration.</string>
+    <string name="restriction_integer_title">My INTEGER</string>
+    <string name="restriction_integer_description">Integer baseline managed configuration.</string>
+    <string name="restriction_choice_title">My CHOICE</string>
+    <string name="restriction_choice_description">Single-select managed configuration.</string>
+    <string name="restriction_multiselect_title">My MULTISELECT</string>
+    <string name="restriction_multiselect_description">Multi-select managed configuration.</string>
+    <string name="restriction_hidden_title">My HIDDEN</string>
+    <string name="restriction_hidden_description">Hidden payload managed configuration.</string>
+    <string name="restriction_bundle_title">My BUNDLE</string>
+    <string name="restriction_bundle_description">Nested managed configuration bundle.</string>
+    <string name="restriction_bundle_array_title">My BUNDLE ARRAY</string>
+    <string name="restriction_bundle_array_description">Managed configuration array of bundles.</string>
+    <string name="restriction_bundle_array_item_title">Bundle array item</string>
+    <string name="choice_none">None</string>
+    <string name="choice_another">Another</string>
+    <string name="multiselect_none">None</string>
+    <string name="multiselect_one">One</string>
+    <string name="multiselect_two">Two</string>
+</resources>

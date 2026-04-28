@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<restrictions xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <restriction
+        android:key="my_bool_key"
+        android:title="@string/restriction_bool_title"
+        android:description="@string/restriction_bool_description"
+        android:restrictionType="bool"
+        android:defaultValue="false" />
+
+    <restriction
+        android:key="my_string_key"
+        android:title="@string/restriction_string_title"
+        android:description="@string/restriction_string_description"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="my_integer_key"
+        android:title="@string/restriction_integer_title"
+        android:description="@string/restriction_integer_description"
+        android:restrictionType="integer"
+        android:defaultValue="0" />
+
+    <restriction
+        android:key="my_choice_key"
+        android:title="@string/restriction_choice_title"
+        android:description="@string/restriction_choice_description"
+        android:restrictionType="choice"
+        android:entries="@array/choice_entries"
+        android:entryValues="@array/choice_values"
+        android:defaultValue="another" />
+
+    <restriction
+        android:key="my_multiselect_key"
+        android:title="@string/restriction_multiselect_title"
+        android:description="@string/restriction_multiselect_description"
+        android:restrictionType="multi-select"
+        android:entries="@array/multiselect_entries"
+        android:entryValues="@array/multiselect_values" />
+
+    <restriction
+        android:key="my_hidden_key"
+        android:title="@string/restriction_hidden_title"
+        android:description="@string/restriction_hidden_description"
+        android:restrictionType="hidden"
+        android:defaultValue="hidden-default" />
+
+    <restriction
+        android:key="my_bundle_key"
+        android:title="@string/restriction_bundle_title"
+        android:description="@string/restriction_bundle_description"
+        android:restrictionType="bundle">
+        <restriction
+            android:key="my_bool_key_in_bundle"
+            android:title="@string/restriction_bool_title"
+            android:description="@string/restriction_bool_description"
+            android:restrictionType="bool"
+            android:defaultValue="false" />
+        <restriction
+            android:key="my_string_key_in_bundle"
+            android:title="@string/restriction_string_title"
+            android:description="@string/restriction_string_description"
+            android:restrictionType="string" />
+        <restriction
+            android:key="my_choice_key_in_bundle"
+            android:title="@string/restriction_choice_title"
+            android:description="@string/restriction_choice_description"
+            android:restrictionType="choice"
+            android:entries="@array/choice_entries"
+            android:entryValues="@array/choice_values"
+            android:defaultValue="another" />
+    </restriction>
+
+    <restriction
+        android:key="my_bundle_array_key"
+        android:title="@string/restriction_bundle_array_title"
+        android:description="@string/restriction_bundle_array_description"
+        android:restrictionType="bundle_array">
+        <restriction
+            android:key="my_bundle_array_item"
+            android:title="@string/restriction_bundle_array_item_title"
+            android:restrictionType="bundle">
+            <restriction
+                android:key="my_bool_key_in_bundle_array"
+                android:title="@string/restriction_bool_title"
+                android:description="@string/restriction_bool_description"
+                android:restrictionType="bool"
+                android:defaultValue="false" />
+            <restriction
+                android:key="my_string_key_in_bundle_array"
+                android:title="@string/restriction_string_title"
+                android:description="@string/restriction_string_description"
+                android:restrictionType="string" />
+            <restriction
+                android:key="my_choice_key_in_bundle_array"
+                android:title="@string/restriction_choice_title"
+                android:description="@string/restriction_choice_description"
+                android:restrictionType="choice"
+                android:entries="@array/choice_entries"
+                android:entryValues="@array/choice_values"
+                android:defaultValue="another" />
+        </restriction>
+    </restriction>
+
+</restrictions>
