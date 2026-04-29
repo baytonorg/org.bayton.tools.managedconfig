@@ -47,7 +47,7 @@ class ManagedConfigScreenSmokeTest {
     launchMainActivity()
 
     openLocalValidationTab()
-    waitForText("Validation input")
+    waitForAnyText("Validation target", "Select an installed app to validate")
   }
 
   @Test
@@ -93,7 +93,12 @@ class ManagedConfigScreenSmokeTest {
   }
 
   private fun openLocalValidationTab() {
-    if (device.findObject(By.textContains("Validation input")) != null) return
+    if (
+      device.findObject(By.textContains("Validation target")) != null ||
+        device.findObject(By.textContains("Select an installed app to validate")) != null
+    ) {
+      return
+    }
 
     val localValidationTab = device.findObject(By.textContains("Local validation"))
     if (localValidationTab != null) {
@@ -102,7 +107,10 @@ class ManagedConfigScreenSmokeTest {
       swipeLeft()
     }
 
-    if (device.findObject(By.textContains("Validation input")) == null) {
+    if (
+      device.findObject(By.textContains("Validation target")) == null &&
+        device.findObject(By.textContains("Select an installed app to validate")) == null
+    ) {
       swipeLeft()
     }
   }
