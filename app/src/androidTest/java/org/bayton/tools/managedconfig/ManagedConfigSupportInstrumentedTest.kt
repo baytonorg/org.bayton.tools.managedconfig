@@ -129,17 +129,19 @@ class ManagedConfigSupportInstrumentedTest {
 
     val uiState =
       buildUiState(
-        effectiveRestrictions = effective,
-        managedRestrictions = managed,
-        rawManagedRestrictions = managed,
-        managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
-        managedShapeHighlights = emptyList(),
-        localOverrideJson = """{"local_only_key":"simulated"}""",
-        localOverrideFormat = OverrideFormat.UNFLATTENED.label,
-        localShapeHighlights = emptyList(),
-        keyedAppStatesStatus = "Not reported",
-        keyedAppStatesUpdatedAt = "",
-        source = "Test",
+        UiStateInputs(
+          effectiveRestrictions = effective,
+          managedRestrictions = managed,
+          rawManagedRestrictions = managed,
+          managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
+          managedShapeHighlights = emptyList(),
+          localOverrideJson = """{"local_only_key":"simulated"}""",
+          localOverrideFormat = OverrideFormat.UNFLATTENED.label,
+          localShapeHighlights = emptyList(),
+          keyedAppStatesStatus = "Not reported",
+          keyedAppStatesUpdatedAt = "",
+          source = "Test",
+        ),
       )
 
     assertTrue(uiState.effectiveItems.any { it.key == "local_only_key" })

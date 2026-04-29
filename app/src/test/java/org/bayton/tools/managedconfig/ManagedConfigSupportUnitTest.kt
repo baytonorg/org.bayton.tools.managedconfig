@@ -32,17 +32,19 @@ class ManagedConfigSupportUnitTest {
 
     val uiState =
       buildUiState(
-        effectiveRestrictions = localBundle,
-        managedRestrictions = Bundle(),
-        rawManagedRestrictions = Bundle(),
-        managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
-        managedShapeHighlights = emptyList(),
-        localOverrideJson = """{"my_bundle_array_key":[{"my_bool_key_in_bundle_array":true}]}""",
-        localOverrideFormat = OverrideFormat.UNFLATTENED.label,
-        localShapeHighlights = listOf("my_bundle_array_key: no item wrapper key"),
-        keyedAppStatesStatus = "No keyed app states reported yet",
-        keyedAppStatesUpdatedAt = "",
-        source = "test",
+        UiStateInputs(
+          effectiveRestrictions = localBundle,
+          managedRestrictions = Bundle(),
+          rawManagedRestrictions = Bundle(),
+          managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
+          managedShapeHighlights = emptyList(),
+          localOverrideJson = """{"my_bundle_array_key":[{"my_bool_key_in_bundle_array":true}]}""",
+          localOverrideFormat = OverrideFormat.UNFLATTENED.label,
+          localShapeHighlights = listOf("my_bundle_array_key: no item wrapper key"),
+          keyedAppStatesStatus = "No keyed app states reported yet",
+          keyedAppStatesUpdatedAt = "",
+          source = "test",
+        ),
       )
 
     val item = uiState.effectiveItems.first { it.key == "my_bundle_array_key" }
@@ -65,17 +67,19 @@ class ManagedConfigSupportUnitTest {
 
     val uiState =
       buildUiState(
-        effectiveRestrictions = localBundle,
-        managedRestrictions = managedBundle,
-        rawManagedRestrictions = managedBundle,
-        managedRuntimeStructure = RuntimeManagedConfigStructure.CANONICAL.label,
-        managedShapeHighlights = emptyList(),
-        localOverrideJson = """{"extra_key":"local"}""",
-        localOverrideFormat = OverrideFormat.UNFLATTENED.label,
-        localShapeHighlights = emptyList(),
-        keyedAppStatesStatus = "No keyed app states reported yet",
-        keyedAppStatesUpdatedAt = "",
-        source = "test",
+        UiStateInputs(
+          effectiveRestrictions = localBundle,
+          managedRestrictions = managedBundle,
+          rawManagedRestrictions = managedBundle,
+          managedRuntimeStructure = RuntimeManagedConfigStructure.CANONICAL.label,
+          managedShapeHighlights = emptyList(),
+          localOverrideJson = """{"extra_key":"local"}""",
+          localOverrideFormat = OverrideFormat.UNFLATTENED.label,
+          localShapeHighlights = emptyList(),
+          keyedAppStatesStatus = "No keyed app states reported yet",
+          keyedAppStatesUpdatedAt = "",
+          source = "test",
+        ),
       )
 
     val item = uiState.effectiveItems.first { it.key == "extra_key" }
@@ -351,18 +355,20 @@ class ManagedConfigSupportUnitTest {
   fun buildUiStateMarksLocalOverrideInactiveWhenThereIsAnError() {
     val uiState =
       buildUiState(
-        effectiveRestrictions = Bundle(),
-        managedRestrictions = Bundle(),
-        rawManagedRestrictions = Bundle(),
-        managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
-        managedShapeHighlights = emptyList(),
-        localOverrideJson = """{"my_string_key":"broken"}""",
-        localOverrideFormat = OverrideFormat.INVALID.label,
-        localShapeHighlights = emptyList(),
-        keyedAppStatesStatus = "Failed",
-        keyedAppStatesUpdatedAt = "",
-        source = "Unit test",
-        localOverrideError = "Parse failed",
+        UiStateInputs(
+          effectiveRestrictions = Bundle(),
+          managedRestrictions = Bundle(),
+          rawManagedRestrictions = Bundle(),
+          managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
+          managedShapeHighlights = emptyList(),
+          localOverrideJson = """{"my_string_key":"broken"}""",
+          localOverrideFormat = OverrideFormat.INVALID.label,
+          localShapeHighlights = emptyList(),
+          keyedAppStatesStatus = "Failed",
+          keyedAppStatesUpdatedAt = "",
+          source = "Unit test",
+          localOverrideError = "Parse failed",
+        ),
       )
 
     assertFalse(uiState.localOverrideActive)
@@ -432,20 +438,22 @@ class ManagedConfigSupportUnitTest {
 
     val uiState =
       buildUiState(
-        effectiveRestrictions = parsed.bundle,
-        managedRestrictions = Bundle(),
-        rawManagedRestrictions = Bundle(),
-        managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
-        managedShapeHighlights = emptyList(),
-        localOverrideJson = "{}",
-        localOverrideFormat = parsed.format.label,
-        localShapeHighlights = listOf("my_bundle_array_key: wrapper key my_bundle_array_item"),
-        keyedAppStatesStatus = "No keyed app states reported yet",
-        keyedAppStatesUpdatedAt = "",
-        source = "test",
-        selectedImportedApp = InstalledAppOption("Test", "com.example.test", null),
-        importedSchemaDefinitions = importedDefinitions,
-        importedSchemaError = null,
+        UiStateInputs(
+          effectiveRestrictions = parsed.bundle,
+          managedRestrictions = Bundle(),
+          rawManagedRestrictions = Bundle(),
+          managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
+          managedShapeHighlights = emptyList(),
+          localOverrideJson = "{}",
+          localOverrideFormat = parsed.format.label,
+          localShapeHighlights = listOf("my_bundle_array_key: wrapper key my_bundle_array_item"),
+          keyedAppStatesStatus = "No keyed app states reported yet",
+          keyedAppStatesUpdatedAt = "",
+          source = "test",
+          selectedImportedApp = InstalledAppOption("Test", "com.example.test", null),
+          importedSchemaDefinitions = importedDefinitions,
+          importedSchemaError = null,
+        ),
       )
 
     val parentItem = uiState.localValidationItems.first { it.key == "my_bundle_array_key" }

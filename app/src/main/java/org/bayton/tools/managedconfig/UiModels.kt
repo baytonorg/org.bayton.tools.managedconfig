@@ -72,6 +72,8 @@ data class ManagedConfigUiState(
   val localShapeHighlights: List<String> = emptyList(),
   val keyedAppStatesStatus: String = "No keyed app states reported yet",
   val keyedAppStatesUpdatedAt: String = "",
+  val importableAppsLoading: Boolean = false,
+  val importedSchemaLoading: Boolean = false,
   val importableApps: List<InstalledAppOption> = emptyList(),
   val selectedImportedAppLabel: String? = null,
   val selectedImportedAppPackage: String? = null,

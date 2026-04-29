@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.RestrictionsManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -17,13 +16,28 @@ import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.flow.collectLatest
 import org.bayton.tools.managedconfig.theme.BaytonManagedConfigTheme
 
 class MainActivity : ComponentActivity() {
-  private val managedConfigViewModel: ManagedConfigViewModel by viewModels()
+  private val managedConfigViewModel: ManagedConfigViewModel by viewModels {
+    viewModelFactory {
+      initializer {
+        ManagedConfigViewModel(
+          managedConfigRepository = AndroidManagedConfigRepository(applicationContext),
+          installedAppsRepository = AndroidInstalledAppsRepository(applicationContext),
+          keyedAppStatesPublisher = AndroidKeyedAppStatesPublisher(applicationContext),
+          currentPackageName = packageName,
+          isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+          savedStateHandle = createSavedStateHandle(),
+        )
+      }
+    }
+  }
   private var receiverRegistered = false
-  private val restrictionsManager by lazy { getSystemService(RestrictionsManager::class.java) }
 
   private val restrictionsReceiver =
     object : BroadcastReceiver() {
@@ -41,11 +55,7 @@ class MainActivity : ComponentActivity() {
       navigationBarStyle = SystemBarStyle.auto(LIGHT_SYSTEM_BAR_SCRIM, DARK_SYSTEM_BAR_SCRIM),
     )
 
-    managedConfigViewModel.loadInstalledApps()
-    managedConfigViewModel.restoreUiState(
-      selectedImportedPackage = savedInstanceState?.getString(STATE_SELECTED_IMPORTED_PACKAGE),
-      localOverrideJson = savedInstanceState?.getString(STATE_LOCAL_OVERRIDE_JSON),
-    )
+    managedConfigViewModel.initialize()
     managedConfigViewModel.handleIncomingIntent(intent)
 
     setContent {
@@ -105,17 +115,9 @@ class MainActivity : ComponentActivity() {
     }
     super.onStop()
   }
-
-  override fun onSaveInstanceState(outState: Bundle) {
-    super.onSaveInstanceState(outState)
-    outState.putString(STATE_SELECTED_IMPORTED_PACKAGE, managedConfigViewModel.selectedImportedPackage())
-    outState.putString(STATE_LOCAL_OVERRIDE_JSON, managedConfigViewModel.currentOverrideJson())
-  }
 }
 
 internal const val EXTRA_MANAGED_CONFIG_JSON = "managed_config_json"
 internal const val EMPTY_MANAGED_CONFIG_SIGNATURE = "__empty_managed_config__"
-private const val STATE_SELECTED_IMPORTED_PACKAGE = "state_selected_imported_package"
-private const val STATE_LOCAL_OVERRIDE_JSON = "state_local_override_json"
 private const val LIGHT_SYSTEM_BAR_SCRIM = 0xFFF7F7F7.toInt()
 private const val DARK_SYSTEM_BAR_SCRIM = 0xFF141218.toInt()

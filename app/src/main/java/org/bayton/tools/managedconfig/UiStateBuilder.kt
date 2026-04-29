@@ -2,32 +2,36 @@ package org.bayton.tools.managedconfig
 
 import android.os.Bundle
 
-internal fun buildUiState(
-  effectiveRestrictions: Bundle,
-  managedRestrictions: Bundle,
-  rawManagedRestrictions: Bundle,
-  managedRuntimeStructure: String,
-  managedShapeHighlights: List<String>,
-  localOverrideJson: String,
-  localOverrideFormat: String?,
-  localShapeHighlights: List<String>,
-  keyedAppStatesStatus: String,
-  keyedAppStatesUpdatedAt: String,
-  source: String,
-  importableApps: List<InstalledAppOption> = emptyList(),
-  selectedImportedApp: InstalledAppOption? = null,
-  importedSchemaDefinitions: List<ManagedConfigDefinition> = emptyList(),
-  importedSchemaError: String? = null,
-  localOverrideError: String? = null,
-): ManagedConfigUiState {
-  val managedKeys = managedRestrictions.keySet().sorted()
-  val effectiveKeys = effectiveRestrictions.keySet().sorted()
-  val managedShapeHighlightByKey = managedShapeHighlights.associateBy { it.substringBefore(':') }
-  val localShapeHighlightByKey = localShapeHighlights.associateBy { it.substringBefore(':') }
+internal data class UiStateInputs(
+  val effectiveRestrictions: Bundle,
+  val managedRestrictions: Bundle,
+  val rawManagedRestrictions: Bundle,
+  val managedRuntimeStructure: String,
+  val managedShapeHighlights: List<String>,
+  val localOverrideJson: String,
+  val localOverrideFormat: String?,
+  val localShapeHighlights: List<String>,
+  val keyedAppStatesStatus: String,
+  val keyedAppStatesUpdatedAt: String,
+  val source: String,
+  val importableAppsLoading: Boolean = false,
+  val importedSchemaLoading: Boolean = false,
+  val importableApps: List<InstalledAppOption> = emptyList(),
+  val selectedImportedApp: InstalledAppOption? = null,
+  val importedSchemaDefinitions: List<ManagedConfigDefinition> = emptyList(),
+  val importedSchemaError: String? = null,
+  val localOverrideError: String? = null,
+)
+
+internal fun buildUiState(inputs: UiStateInputs): ManagedConfigUiState {
+  val managedKeys = inputs.managedRestrictions.keySet().sorted()
+  val effectiveKeys = inputs.effectiveRestrictions.keySet().sorted()
+  val managedShapeHighlightByKey = inputs.managedShapeHighlights.associateBy { it.substringBefore(':') }
+  val localShapeHighlightByKey = inputs.localShapeHighlights.associateBy { it.substringBefore(':') }
   val configuredItems =
     managedConfigDefinitions.map { definition ->
-      val isManagedConfigured = managedRestrictions.containsKey(definition.key)
-      val isEffectiveConfigured = effectiveRestrictions.containsKey(definition.key)
+      val isManagedConfigured = inputs.managedRestrictions.containsKey(definition.key)
+      val isEffectiveConfigured = inputs.effectiveRestrictions.containsKey(definition.key)
       val managedShapeHighlight = managedShapeHighlightByKey[definition.key]
       val localShapeHighlight = localShapeHighlightByKey[definition.key]
       val hasManagedSchemaError =
@@ -45,17 +49,17 @@ internal fun buildUiState(
         isEffectiveConfigured = isEffectiveConfigured,
         managedValue =
           if (isManagedConfigured) {
-            if (rawManagedRestrictions.containsKey(definition.key)) {
-              formatDeliveredValueForKey(definition.key, rawManagedRestrictions.valueForKey(definition.key))
+            if (inputs.rawManagedRestrictions.containsKey(definition.key)) {
+              formatDeliveredValueForKey(definition.key, inputs.rawManagedRestrictions.valueForKey(definition.key))
             } else {
-              formatValueForDisplay(managedRestrictions.valueForKey(definition.key))
+              formatValueForDisplay(inputs.managedRestrictions.valueForKey(definition.key))
             }
           } else {
             "Not set by RestrictionsManager"
           },
         effectiveValue =
           if (isEffectiveConfigured) {
-            formatDeliveredValueForKey(definition.key, effectiveRestrictions.valueForKey(definition.key))
+            formatDeliveredValueForKey(definition.key, inputs.effectiveRestrictions.valueForKey(definition.key))
           } else {
             "Not set"
           },
@@ -77,18 +81,18 @@ internal fun buildUiState(
           payloadKey = key,
           title = key,
           description = "Additional managed configuration received at runtime.",
-          typeLabel = inferManagedConfigValueType(rawManagedRestrictions.valueForKey(key)).label,
+          typeLabel = inferManagedConfigValueType(inputs.rawManagedRestrictions.valueForKey(key)).label,
           isManagedConfigured = true,
-          isEffectiveConfigured = effectiveRestrictions.containsKey(key),
+          isEffectiveConfigured = inputs.effectiveRestrictions.containsKey(key),
           managedValue =
-            if (rawManagedRestrictions.containsKey(key)) {
-              formatDeliveredValueForKey(key, rawManagedRestrictions.valueForKey(key))
+            if (inputs.rawManagedRestrictions.containsKey(key)) {
+              formatDeliveredValueForKey(key, inputs.rawManagedRestrictions.valueForKey(key))
             } else {
-              formatValueForDisplay(managedRestrictions.valueForKey(key))
+              formatValueForDisplay(inputs.managedRestrictions.valueForKey(key))
             },
           effectiveValue =
-            if (effectiveRestrictions.containsKey(key)) {
-              formatDeliveredValueForKey(key, effectiveRestrictions.valueForKey(key))
+            if (inputs.effectiveRestrictions.containsKey(key)) {
+              formatDeliveredValueForKey(key, inputs.effectiveRestrictions.valueForKey(key))
             } else {
               "Not set"
             },
@@ -110,20 +114,20 @@ internal fun buildUiState(
           payloadKey = key,
           title = key,
           description = "Additional local simulation key.",
-          typeLabel = inferManagedConfigValueType(effectiveRestrictions.valueForKey(key)).label,
-          isManagedConfigured = managedRestrictions.containsKey(key),
+          typeLabel = inferManagedConfigValueType(inputs.effectiveRestrictions.valueForKey(key)).label,
+          isManagedConfigured = inputs.managedRestrictions.containsKey(key),
           isEffectiveConfigured = true,
           managedValue =
-            if (managedRestrictions.containsKey(key)) {
-              if (rawManagedRestrictions.containsKey(key)) {
-                formatDeliveredValueForKey(key, rawManagedRestrictions.valueForKey(key))
+            if (inputs.managedRestrictions.containsKey(key)) {
+              if (inputs.rawManagedRestrictions.containsKey(key)) {
+                formatDeliveredValueForKey(key, inputs.rawManagedRestrictions.valueForKey(key))
               } else {
-                formatValueForDisplay(managedRestrictions.valueForKey(key))
+                formatValueForDisplay(inputs.managedRestrictions.valueForKey(key))
               }
             } else {
               "Not set by RestrictionsManager"
             },
-          effectiveValue = formatDeliveredValueForKey(key, effectiveRestrictions.valueForKey(key)),
+          effectiveValue = formatDeliveredValueForKey(key, inputs.effectiveRestrictions.valueForKey(key)),
           managedHasSchemaError = false,
           managedSchemaChipLabel = null,
           managedSchemaMessage = null,
@@ -145,15 +149,15 @@ internal fun buildUiState(
       }
 
   val activeLocalSchemaDefinitions =
-    if (selectedImportedApp != null && importedSchemaDefinitions.isNotEmpty()) {
-      importedSchemaDefinitions
+    if (inputs.selectedImportedApp != null && inputs.importedSchemaDefinitions.isNotEmpty()) {
+      inputs.importedSchemaDefinitions
     } else {
       emptyList()
     }
   val activeLocalDefinitionKeys = activeLocalSchemaDefinitions.map { it.key }.toSet()
   val localValidationItems =
     activeLocalSchemaDefinitions.map { definition ->
-      val resolvedValue = resolveImportedDefinitionValue(effectiveRestrictions, definition)
+      val resolvedValue = resolveImportedDefinitionValue(inputs.effectiveRestrictions, definition)
       val isConfigured = resolvedValue != null
       val localShapeHighlight = localShapeHighlightByKey[definition.payloadKey]
       val hasArrayWrapperSchemaError =
@@ -189,17 +193,17 @@ internal fun buildUiState(
             payloadKey = key,
             title = key,
             description =
-              if (selectedImportedApp != null) {
+              if (inputs.selectedImportedApp != null) {
                 "Additional local simulation key not declared in the selected app schema."
               } else {
                 "Additional local simulation key."
               },
-            typeLabel = inferManagedConfigValueType(effectiveRestrictions.valueForKey(key)).label,
+            typeLabel = inferManagedConfigValueType(inputs.effectiveRestrictions.valueForKey(key)).label,
             depth = 0,
             isManagedConfigured = false,
             isEffectiveConfigured = true,
             managedValue = "Not set by RestrictionsManager",
-            effectiveValue = formatDeliveredValueForKey(key, effectiveRestrictions.valueForKey(key)),
+            effectiveValue = formatDeliveredValueForKey(key, inputs.effectiveRestrictions.valueForKey(key)),
             effectiveHasSchemaError =
               localShapeHighlightByKey[key]?.let(::isNonCanonicalBundleArrayShapeText) == true,
             effectiveSchemaChipLabel =
@@ -217,16 +221,16 @@ internal fun buildUiState(
           )
         }
 
-  val localOverrideActive = localOverrideJson.isNotBlank() && localOverrideError == null
+  val localOverrideActive = inputs.localOverrideJson.isNotBlank() && inputs.localOverrideError == null
 
-  val effectiveStructuredPayload = formatBundleAsStructuredJson(effectiveRestrictions)
-  val managedRawStructuredPayload = formatBundleAsStructuredJson(rawManagedRestrictions)
-  val managedNormalizedStructuredPayload = formatBundleAsStructuredJson(managedRestrictions)
-  val localPayloadNormalizedDifference = localShapeHighlights.any(::isNonCanonicalBundleArrayShapeText)
+  val effectiveStructuredPayload = formatBundleAsStructuredJson(inputs.effectiveRestrictions)
+  val managedRawStructuredPayload = formatBundleAsStructuredJson(inputs.rawManagedRestrictions)
+  val managedNormalizedStructuredPayload = formatBundleAsStructuredJson(inputs.managedRestrictions)
+  val localPayloadNormalizedDifference = inputs.localShapeHighlights.any(::isNonCanonicalBundleArrayShapeText)
 
   return ManagedConfigUiState(
     hasManagedConfig = managedKeys.isNotEmpty(),
-    source = source,
+    source = inputs.source,
     updatedAt = nowTimestamp(),
     managedConfiguredCount = managedKeys.size,
     effectiveConfiguredCount = effectiveKeys.size,
@@ -237,23 +241,25 @@ internal fun buildUiState(
     localValidationSupportedCount = activeLocalSchemaDefinitions.size,
     effectivePayload = effectiveStructuredPayload,
     managedPayload = managedNormalizedStructuredPayload,
-    effectiveRuntimePayload = formatBundleRuntimePreview(effectiveRestrictions),
-    managedRuntimePayload = formatBundleRuntimePreview(rawManagedRestrictions),
+    effectiveRuntimePayload = formatBundleRuntimePreview(inputs.effectiveRestrictions),
+    managedRuntimePayload = formatBundleRuntimePreview(inputs.rawManagedRestrictions),
     effectivePayloadNormalizedDifference = localPayloadNormalizedDifference,
     managedPayloadNormalizedDifference = managedRawStructuredPayload != managedNormalizedStructuredPayload,
-    managedPayloadFormat = if (managedKeys.isNotEmpty()) managedRuntimeStructure else "No managed payload",
-    managedShapeHighlights = managedShapeHighlights,
-    localOverrideJson = localOverrideJson,
+    managedPayloadFormat = if (managedKeys.isNotEmpty()) inputs.managedRuntimeStructure else "No managed payload",
+    managedShapeHighlights = inputs.managedShapeHighlights,
+    localOverrideJson = inputs.localOverrideJson,
     localOverrideActive = localOverrideActive,
-    localOverrideFormat = localOverrideFormat ?: "None",
-    localShapeHighlights = localShapeHighlights,
-    keyedAppStatesStatus = keyedAppStatesStatus,
-    keyedAppStatesUpdatedAt = keyedAppStatesUpdatedAt,
-    importableApps = importableApps,
-    selectedImportedAppLabel = selectedImportedApp?.label,
-    selectedImportedAppPackage = selectedImportedApp?.packageName,
-    importedSchemaError = importedSchemaError,
-    localOverrideError = localOverrideError,
+    localOverrideFormat = inputs.localOverrideFormat ?: "None",
+    localShapeHighlights = inputs.localShapeHighlights,
+    keyedAppStatesStatus = inputs.keyedAppStatesStatus,
+    keyedAppStatesUpdatedAt = inputs.keyedAppStatesUpdatedAt,
+    importableAppsLoading = inputs.importableAppsLoading,
+    importedSchemaLoading = inputs.importedSchemaLoading,
+    importableApps = inputs.importableApps,
+    selectedImportedAppLabel = inputs.selectedImportedApp?.label,
+    selectedImportedAppPackage = inputs.selectedImportedApp?.packageName,
+    importedSchemaError = inputs.importedSchemaError,
+    localOverrideError = inputs.localOverrideError,
   )
 }
 

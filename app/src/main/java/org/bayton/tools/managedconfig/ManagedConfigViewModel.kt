@@ -1,15 +1,13 @@
 package org.bayton.tools.managedconfig
 
-import android.app.Application
 import android.content.RestrictionEntry
-import android.content.RestrictionsManager
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
-import android.os.Build
+import android.content.Intent
 import android.os.Bundle
-import androidx.enterprise.feedback.KeyedAppStatesReporter
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -17,18 +15,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ManagedConfigViewModel(
-  application: Application,
-) : AndroidViewModel(application) {
-  private val appContext = application.applicationContext
-  private val restrictionsManager by lazy { appContext.getSystemService(RestrictionsManager::class.java) }
-  private val keyedAppStatesReporter by lazy { KeyedAppStatesReporter.create(appContext) }
-  private val isDebuggable by lazy {
-    (application.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-  }
+  private val managedConfigRepository: ManagedConfigRepository,
+  private val installedAppsRepository: InstalledAppsRepository,
+  private val keyedAppStatesPublisher: KeyedAppStatesPublisher,
+  private val currentPackageName: String,
+  private val isDebuggable: Boolean,
+  private val savedStateHandle: SavedStateHandle,
+) : ViewModel() {
 
-  private var currentOverrideJson: String? = null
+  private var currentOverrideJson: String? = savedStateHandle[STATE_LOCAL_OVERRIDE_JSON]
   private var currentParsedOverride: ParsedOverride? = null
   private var lastReportedManagedSignature: String? = null
   private var lastFeedbackStatusMessage: String = "No keyed app states reported yet"
@@ -37,6 +35,9 @@ class ManagedConfigViewModel(
   private var selectedImportedApp: InstalledAppOption? = null
   private var importedSchemaDefinitions: List<ManagedConfigDefinition> = emptyList()
   private var importedSchemaError: String? = null
+  private var importableAppsLoading = false
+  private var importedSchemaLoading = false
+  private var initialized = false
 
   private val _uiState = MutableStateFlow(ManagedConfigUiState())
   val uiState: StateFlow<ManagedConfigUiState> = _uiState.asStateFlow()
@@ -44,45 +45,38 @@ class ManagedConfigViewModel(
   private val _uiEvents = MutableSharedFlow<ManagedConfigUiEvent>()
   val uiEvents: SharedFlow<ManagedConfigUiEvent> = _uiEvents.asSharedFlow()
 
-  fun loadInstalledApps() {
-    val packageManager = appContext.packageManager
-    @Suppress("DEPRECATION")
-    val installedApplications =
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        packageManager.getInstalledApplications(
-          PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong()),
-        )
-      } else {
-        packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+  fun initialize() {
+    if (initialized) return
+    initialized = true
+    importableAppsLoading = true
+    val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
+    val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
+    rebuildUiState(
+      source = "App start",
+      effectiveRestrictions = currentParsedOverride?.bundle ?: Bundle(),
+      managedRestrictions = normalizedManagedConfig.normalizedBundle,
+      rawManagedRestrictions = rawManagedRestrictions,
+      managedRuntimeStructure = normalizedManagedConfig.structure.label,
+      managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
+      localOverrideFormat = currentParsedOverride?.format?.label,
+      localShapeHighlights = currentParsedOverride?.shapeHighlights?.map(::formatBundleArrayShapeHighlight).orEmpty(),
+    )
+    viewModelScope.launch {
+      availableSchemaApps = withContext(Dispatchers.IO) { installedAppsRepository.listApps() }
+      importableAppsLoading = false
+      val restoredPackage = savedStateHandle.get<String>(STATE_SELECTED_IMPORTED_PACKAGE)?.takeIf { it.isNotBlank() }
+      if (restoredPackage != null) {
+        importSchemaForPackage(restoredPackage, source = "Restored validation target")
       }
-
-    availableSchemaApps =
-      installedApplications
-        .map { info ->
-          InstalledAppOption(
-            label = packageManager.getApplicationLabel(info).toString().ifBlank { info.packageName },
-            packageName = info.packageName,
-            icon = packageManager.getApplicationIcon(info),
-          )
-        }.sortedWith(
-          compareBy<InstalledAppOption, String>(String.CASE_INSENSITIVE_ORDER) { it.label }
-            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.packageName },
-        )
-  }
-
-  fun restoreUiState(
-    selectedImportedPackage: String?,
-    localOverrideJson: String?,
-  ) {
-    if (!selectedImportedPackage.isNullOrBlank()) {
-      selectImportedSchemaPackage(selectedImportedPackage)
-    }
-    if (!localOverrideJson.isNullOrBlank()) {
-      applyLocalOverride(localOverrideJson, "Restored validation input")
+      if (!currentOverrideJson.isNullOrBlank()) {
+        applyLocalOverride(currentOverrideJson.orEmpty(), "Restored validation input")
+      } else {
+        refreshRestrictions("App start")
+      }
     }
   }
 
-  fun handleIncomingIntent(intent: android.content.Intent?) {
+  fun handleIncomingIntent(intent: Intent?) {
     val json = intent?.getStringExtra(EXTRA_MANAGED_CONFIG_JSON) ?: return
     intent.removeExtra(EXTRA_MANAGED_CONFIG_JSON)
     if (!isDebuggable) {
@@ -93,30 +87,21 @@ class ManagedConfigViewModel(
   }
 
   fun refreshRestrictions(source: String) {
-    val rawManagedRestrictions = restrictionsManager.applicationRestrictions ?: Bundle()
+    val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
     val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
     val managedRestrictions = normalizedManagedConfig.normalizedBundle
     reportManagedConfigFeedbackIfNeeded(rawManagedRestrictions)
     val localSimulationRestrictions = currentParsedOverride?.bundle ?: Bundle()
-
-    _uiState.value =
-      buildUiState(
-        effectiveRestrictions = localSimulationRestrictions,
-        managedRestrictions = managedRestrictions,
-        rawManagedRestrictions = rawManagedRestrictions,
-        managedRuntimeStructure = normalizedManagedConfig.structure.label,
-        managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-        localOverrideJson = currentOverrideJson.orEmpty(),
-        localOverrideFormat = currentParsedOverride?.format?.label,
-        localShapeHighlights = currentParsedOverride?.shapeHighlights?.map(::formatBundleArrayShapeHighlight).orEmpty(),
-        keyedAppStatesStatus = lastFeedbackStatusMessage,
-        keyedAppStatesUpdatedAt = lastFeedbackUpdatedAt,
-        source = source,
-        importableApps = availableSchemaApps,
-        selectedImportedApp = selectedImportedApp,
-        importedSchemaDefinitions = importedSchemaDefinitions,
-        importedSchemaError = importedSchemaError,
-      )
+    rebuildUiState(
+      source = source,
+      effectiveRestrictions = localSimulationRestrictions,
+      managedRestrictions = managedRestrictions,
+      rawManagedRestrictions = rawManagedRestrictions,
+      managedRuntimeStructure = normalizedManagedConfig.structure.label,
+      managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
+      localOverrideFormat = currentParsedOverride?.format?.label,
+      localShapeHighlights = currentParsedOverride?.shapeHighlights?.map(::formatBundleArrayShapeHighlight).orEmpty(),
+    )
   }
 
   fun applyLocalOverride(
@@ -132,86 +117,55 @@ class ManagedConfigViewModel(
     runCatching { parseJsonBundle(normalized) }
       .onSuccess { parsedOverride ->
         currentOverrideJson = normalized
+        savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = normalized
         currentParsedOverride = parsedOverride
-        val rawManagedRestrictions = restrictionsManager.applicationRestrictions ?: Bundle()
+        val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
         val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
         val managedRestrictions = normalizedManagedConfig.normalizedBundle
-        _uiState.value =
-          buildUiState(
-            effectiveRestrictions = parsedOverride.bundle,
-            managedRestrictions = managedRestrictions,
-            rawManagedRestrictions = rawManagedRestrictions,
-            managedRuntimeStructure = normalizedManagedConfig.structure.label,
-            managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-            localOverrideJson = normalized,
-            localOverrideFormat = parsedOverride.format.label,
-            localShapeHighlights = parsedOverride.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-            keyedAppStatesStatus = lastFeedbackStatusMessage,
-            keyedAppStatesUpdatedAt = lastFeedbackUpdatedAt,
-            source = source,
-            importableApps = availableSchemaApps,
-            selectedImportedApp = selectedImportedApp,
-            importedSchemaDefinitions = importedSchemaDefinitions,
-            importedSchemaError = importedSchemaError,
-          )
+        rebuildUiState(
+          source = source,
+          effectiveRestrictions = parsedOverride.bundle,
+          managedRestrictions = managedRestrictions,
+          rawManagedRestrictions = rawManagedRestrictions,
+          managedRuntimeStructure = normalizedManagedConfig.structure.label,
+          managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
+          localOverrideFormat = parsedOverride.format.label,
+          localShapeHighlights = parsedOverride.shapeHighlights.map(::formatBundleArrayShapeHighlight),
+        )
       }.onFailure { error ->
         currentOverrideJson = normalized
+        savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = normalized
         currentParsedOverride = null
-        val rawManagedRestrictions = restrictionsManager.applicationRestrictions ?: Bundle()
+        val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
         val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
         val managedRestrictions = normalizedManagedConfig.normalizedBundle
-        _uiState.value =
-          buildUiState(
-            effectiveRestrictions = Bundle(),
-            managedRestrictions = managedRestrictions,
-            rawManagedRestrictions = rawManagedRestrictions,
-            managedRuntimeStructure = normalizedManagedConfig.structure.label,
-            managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-            localOverrideJson = normalized,
-            localOverrideFormat = detectOverrideFormat(normalized).label,
-            localShapeHighlights = emptyList(),
-            keyedAppStatesStatus = lastFeedbackStatusMessage,
-            keyedAppStatesUpdatedAt = lastFeedbackUpdatedAt,
-            source = source,
-            importableApps = availableSchemaApps,
-            selectedImportedApp = selectedImportedApp,
-            importedSchemaDefinitions = importedSchemaDefinitions,
-            importedSchemaError = importedSchemaError,
-            localOverrideError = error.message ?: "Failed to parse local override JSON.",
-          )
+        rebuildUiState(
+          source = source,
+          effectiveRestrictions = Bundle(),
+          managedRestrictions = managedRestrictions,
+          rawManagedRestrictions = rawManagedRestrictions,
+          managedRuntimeStructure = normalizedManagedConfig.structure.label,
+          managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
+          localOverrideFormat = detectOverrideFormat(normalized).label,
+          localShapeHighlights = emptyList(),
+          localOverrideError = error.message ?: "Failed to parse local override JSON.",
+        )
       }
   }
 
   fun clearLocalOverride(source: String = "Local override cleared") {
     currentOverrideJson = null
+    savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = null
     currentParsedOverride = null
     refreshRestrictions(source)
   }
 
-  fun selectImportedSchemaPackage(packageName: String) {
-    val selectedApp =
-      availableSchemaApps.firstOrNull { it.packageName == packageName }
-        ?: buildInstalledAppOption(packageName)
-        ?: return
-    selectedImportedApp = selectedApp
-    runCatching {
-      restrictionsManager
-        .getManifestRestrictions(packageName)
-        ?.flatMap(RestrictionEntry::toManagedConfigDefinitions)
-        .orEmpty()
-    }.onSuccess { definitions ->
-      importedSchemaDefinitions = definitions
-      importedSchemaError =
-        if (definitions.isEmpty()) {
-          "No managed configuration schema declared by ${selectedApp.packageName}."
-        } else {
-          null
-        }
-      refreshRestrictions("Imported schema selected")
-    }.onFailure { error ->
-      importedSchemaDefinitions = emptyList()
-      importedSchemaError = "Unable to import schema from ${selectedApp.packageName}: ${error.message ?: "unknown error"}"
-      refreshRestrictions("Imported schema import failed")
+  fun selectImportedSchemaPackage(
+    packageName: String,
+    source: String = "Imported schema selected",
+  ) {
+    viewModelScope.launch {
+      importSchemaForPackage(packageName, source)
     }
   }
 
@@ -231,44 +185,64 @@ class ManagedConfigViewModel(
     )
   }
 
-  fun selectedImportedPackage(): String? = selectedImportedApp?.packageName
-
-  fun currentOverrideJson(): String? = currentOverrideJson
-
   private fun loadSampleOverride(
     sampleJson: String,
     source: String,
     toastMessage: String,
   ) {
-    if (selectedImportedApp?.packageName != appContext.packageName) {
-      selectImportedSchemaPackage(appContext.packageName)
-    }
-    applyLocalOverride(sampleJson, source)
     viewModelScope.launch {
+      if (selectedImportedApp?.packageName != currentPackageName) {
+        importSchemaForPackage(currentPackageName, source = "Imported schema selected")
+      }
+      applyLocalOverride(sampleJson, source)
       _uiEvents.emit(ManagedConfigUiEvent.ToastMessage(toastMessage))
     }
   }
 
-  private fun buildInstalledAppOption(targetPackageName: String): InstalledAppOption? {
-    val packageManager = appContext.packageManager
-    return runCatching {
-      val info =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-          packageManager.getApplicationInfo(
-            targetPackageName,
-            PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong()),
-          )
-        } else {
-          @Suppress("DEPRECATION")
-          packageManager.getApplicationInfo(targetPackageName, PackageManager.GET_META_DATA)
-        }
+  private suspend fun importSchemaForPackage(
+    packageName: String,
+    source: String,
+  ) {
+    importedSchemaLoading = true
+    importedSchemaError = null
+    refreshRestrictions("Loading imported schema")
 
-      InstalledAppOption(
-        label = packageManager.getApplicationLabel(info).toString().ifBlank { info.packageName },
-        packageName = info.packageName,
-        icon = packageManager.getApplicationIcon(info),
-      )
-    }.getOrNull()
+    val selectedApp =
+      availableSchemaApps.firstOrNull { it.packageName == packageName }
+        ?: withContext(Dispatchers.IO) { installedAppsRepository.findApp(packageName) }
+
+    if (selectedApp == null) {
+      importedSchemaDefinitions = emptyList()
+      importedSchemaLoading = false
+      importedSchemaError = "Unable to find installed app: $packageName"
+      refreshRestrictions("Imported schema import failed")
+      return
+    }
+
+    selectedImportedApp = selectedApp
+    runCatching<List<ManagedConfigDefinition>> {
+      withContext(Dispatchers.IO) {
+        managedConfigRepository
+          .importSchema(packageName)
+          .flatMap(RestrictionEntry::toManagedConfigDefinitions)
+      }
+    }.onSuccess { definitions ->
+      importedSchemaDefinitions = definitions
+      savedStateHandle[STATE_SELECTED_IMPORTED_PACKAGE] = selectedApp.packageName
+      importedSchemaError =
+        if (definitions.isEmpty()) {
+          "No managed configuration schema declared by ${selectedApp.packageName}."
+        } else {
+          null
+        }
+      importedSchemaLoading = false
+      refreshRestrictions(source)
+    }.onFailure { error ->
+      importedSchemaDefinitions = emptyList()
+      importedSchemaLoading = false
+      importedSchemaError = "Unable to import schema from ${selectedApp.packageName}: ${error.message ?: "unknown error"}"
+      refreshRestrictions("Imported schema import failed")
+    }
   }
 
   private fun reportManagedConfigFeedbackIfNeeded(managedRestrictions: Bundle) {
@@ -276,11 +250,11 @@ class ManagedConfigViewModel(
       if (lastReportedManagedSignature != null) {
         val states = buildManagedConfigFeedbackStates(Bundle(), managedConfigDefinitions)
         val timestamp = nowTimestamp()
-        runCatching { keyedAppStatesReporter.setStates(states) }
+        runCatching { keyedAppStatesPublisher.publish(states) }
           .onSuccess {
             lastReportedManagedSignature = EMPTY_MANAGED_CONFIG_SIGNATURE
-            lastFeedbackStatusMessage = "No keyed app states reported yet"
-            lastFeedbackUpdatedAt = ""
+            lastFeedbackStatusMessage = "Cleared keyed app states from the Android Enterprise feedback channel."
+            lastFeedbackUpdatedAt = timestamp
           }.onFailure { error ->
             lastFeedbackStatusMessage = "Failed to clear keyed app states: ${error.message ?: "unknown error"}"
             lastFeedbackUpdatedAt = timestamp
@@ -297,7 +271,7 @@ class ManagedConfigViewModel(
 
     val states = buildManagedConfigFeedbackStates(managedRestrictions, managedConfigDefinitions)
     val timestamp = nowTimestamp()
-    runCatching { keyedAppStatesReporter.setStates(states) }
+    runCatching { keyedAppStatesPublisher.publish(states) }
       .onSuccess {
         lastReportedManagedSignature = signature
         lastFeedbackStatusMessage = "Reported ${states.size} keyed app states to the Android Enterprise feedback channel."
@@ -307,4 +281,63 @@ class ManagedConfigViewModel(
         lastFeedbackUpdatedAt = timestamp
       }
   }
+
+  private fun rebuildUiState(
+    source: String,
+    effectiveRestrictions: Bundle,
+    managedRestrictions: Bundle,
+    rawManagedRestrictions: Bundle,
+    managedRuntimeStructure: String,
+    managedShapeHighlights: List<String>,
+    localOverrideFormat: String?,
+    localShapeHighlights: List<String>,
+    localOverrideError: String? = null,
+  ) {
+    _uiState.value =
+      buildUiState(
+        UiStateInputs(
+          effectiveRestrictions = effectiveRestrictions,
+          managedRestrictions = managedRestrictions,
+          rawManagedRestrictions = rawManagedRestrictions,
+          managedRuntimeStructure = managedRuntimeStructure,
+          managedShapeHighlights = managedShapeHighlights,
+          localOverrideJson = currentOverrideJson.orEmpty(),
+          localOverrideFormat = localOverrideFormat,
+          localShapeHighlights = localShapeHighlights,
+          keyedAppStatesStatus = lastFeedbackStatusMessage,
+          keyedAppStatesUpdatedAt = lastFeedbackUpdatedAt,
+          source = source,
+          importableAppsLoading = importableAppsLoading,
+          importedSchemaLoading = importedSchemaLoading,
+          importableApps = availableSchemaApps,
+          selectedImportedApp = selectedImportedApp,
+          importedSchemaDefinitions = importedSchemaDefinitions,
+          importedSchemaError = importedSchemaError,
+          localOverrideError = localOverrideError,
+        ),
+      )
+  }
+
+  class Factory(
+    private val managedConfigRepository: ManagedConfigRepository,
+    private val installedAppsRepository: InstalledAppsRepository,
+    private val keyedAppStatesPublisher: KeyedAppStatesPublisher,
+    private val currentPackageName: String,
+    private val isDebuggable: Boolean,
+    private val savedStateHandle: SavedStateHandle,
+  ) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+      ManagedConfigViewModel(
+        managedConfigRepository = managedConfigRepository,
+        installedAppsRepository = installedAppsRepository,
+        keyedAppStatesPublisher = keyedAppStatesPublisher,
+        currentPackageName = currentPackageName,
+        isDebuggable = isDebuggable,
+        savedStateHandle = savedStateHandle,
+      ) as T
+  }
 }
+
+private const val STATE_SELECTED_IMPORTED_PACKAGE = "state_selected_imported_package"
+private const val STATE_LOCAL_OVERRIDE_JSON = "state_local_override_json"

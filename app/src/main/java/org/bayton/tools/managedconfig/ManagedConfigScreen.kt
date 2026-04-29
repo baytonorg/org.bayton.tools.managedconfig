@@ -156,6 +156,8 @@ fun ManagedConfigScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ValidationSchemaPickerCard(
+  importableAppsLoading: Boolean,
+  importedSchemaLoading: Boolean,
   importableApps: List<InstalledAppOption>,
   selectedImportedAppPackage: String?,
   onSelectImportedSchemaPackage: (String) -> Unit,
@@ -188,6 +190,19 @@ private fun ValidationSchemaPickerCard(
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
       )
+      if (importableAppsLoading) {
+        Text(
+          text = "Loading installed apps…",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+      } else if (importedSchemaLoading) {
+        Text(
+          text = "Loading selected app schema…",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+      }
       if (selectedApp != null) {
         DashboardLine(
           label = "Selected",
@@ -197,7 +212,11 @@ private fun ValidationSchemaPickerCard(
       }
       ExposedDropdownMenuBox(
         expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
+        onExpandedChange = {
+          if (!importableAppsLoading && !importedSchemaLoading) {
+            expanded = !expanded
+          }
+        },
       ) {
         OutlinedTextField(
           value = filter,
@@ -212,6 +231,7 @@ private fun ValidationSchemaPickerCard(
           label = { Text("Search apps") },
           placeholder = { Text("Type app name or package") },
           singleLine = true,
+          enabled = !importableAppsLoading && !importedSchemaLoading,
           trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
           colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
         )
@@ -366,6 +386,8 @@ private fun LocalSimulationPage(
         LocalSimulationStatusCard(
           localOverrideActive = uiState.localOverrideActive,
           localOverrideFormat = uiState.localOverrideFormat,
+          importableAppsLoading = uiState.importableAppsLoading,
+          importedSchemaLoading = uiState.importedSchemaLoading,
           selectedImportedAppLabel = uiState.selectedImportedAppLabel,
           selectedImportedAppPackage = uiState.selectedImportedAppPackage,
           configuredCount = uiState.localValidationConfiguredCount,
@@ -377,6 +399,8 @@ private fun LocalSimulationPage(
 
       item {
         ValidationSchemaPickerCard(
+          importableAppsLoading = uiState.importableAppsLoading,
+          importedSchemaLoading = uiState.importedSchemaLoading,
           importableApps = uiState.importableApps,
           selectedImportedAppPackage = uiState.selectedImportedAppPackage,
           onSelectImportedSchemaPackage = onSelectImportedSchemaPackage,
@@ -396,7 +420,7 @@ private fun LocalSimulationPage(
         )
       }
 
-      if (uiState.selectedImportedAppPackage == null) {
+      if (uiState.selectedImportedAppPackage == null && !uiState.importableAppsLoading && !uiState.importedSchemaLoading) {
         item {
           EmptyValidationTargetCard()
         }
@@ -513,6 +537,8 @@ private fun RestrictionsManagerStatusCard(
 private fun LocalSimulationStatusCard(
   localOverrideActive: Boolean,
   localOverrideFormat: String,
+  importableAppsLoading: Boolean,
+  importedSchemaLoading: Boolean,
   selectedImportedAppLabel: String?,
   selectedImportedAppPackage: String?,
   configuredCount: Int,
@@ -550,7 +576,11 @@ private fun LocalSimulationStatusCard(
       DashboardLine(
         label = "App",
         value =
-          if (selectedImportedAppLabel != null && selectedImportedAppPackage != null) {
+          if (importableAppsLoading) {
+            "Loading installed apps"
+          } else if (importedSchemaLoading) {
+            "Loading selected app schema"
+          } else if (selectedImportedAppLabel != null && selectedImportedAppPackage != null) {
             "$selectedImportedAppLabel (${selectedImportedAppPackage})"
           } else {
             "Select an installed app to validate"
@@ -818,7 +848,7 @@ private fun LocalOverrideCard(
         color = MaterialTheme.colorScheme.onPrimaryContainer,
       )
       Text(
-        text = "Validation input is session-only and clears when the process is restarted.",
+        text = "Validation input is stored for the current app session and restored across configuration changes or process recreation.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
       )

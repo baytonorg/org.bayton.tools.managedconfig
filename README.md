@@ -260,7 +260,9 @@ API device report.
 The app does **not** report keyed app states when `RestrictionsManager`
 returns an empty bundle on a cold unmanaged / no-config run. If the app had
 previously reported real managed config and that config is later removed, it
-sends one clearing update so stale EMM-side feedback can be resolved.
+sends one clearing update so stale EMM-side feedback can be resolved. The app
+also keeps that clearing action visible in its local status text, but the EMM
+or device report remains the source of truth for receipt.
 
 Each per-key state reports:
 
@@ -282,14 +284,23 @@ guide to capture states from a fake reporter.
 ```
 app/
   src/main/java/org/bayton/tools/managedconfig/
-    MainActivity.kt              — Activity wiring, RestrictionsManager refresh,
-                                   broadcast receiver, debug-only intent injection
-    ManagedConfigScreen.kt       — Compose UI (two-tab screen, rendering, inputs)
+    MainActivity.kt              — Activity wiring, edge-to-edge setup,
+                                   lifecycle receiver, ViewModel creation
+    ManagedConfigViewModel.kt    — Screen state orchestration, saved state,
+                                   local validation flow, feedback reporting,
+                                   schema import coordination
+    ManagedConfigScreen.kt       — Compose UI (tabs, cards, inputs, previews)
     ManagedConfigSupport.kt      — JSON ↔ Bundle parser, reconstructed JSON
                                    formatter, format detection, runtime
                                    structure rendering
     EnterpriseFeedbackSupport.kt — Keyed app state construction, signature
                                    stability, type validation
+    AppDependencies.kt           — Repository/publisher interfaces and Android
+                                   implementations
+    UiStateBuilder.kt            — UiStateInputs snapshot and UI-state assembly
+    UiModels.kt                  — UI-facing models and value-type enums
+    SchemaImporter.kt            — RestrictionEntry → imported schema mapping
+    SampleData.kt                — Built-in valid/invalid sample payloads
   src/main/res/
     xml/app_restrictions.xml     — Managed config schema referenced by the
                                    manifest <meta-data android:name=
