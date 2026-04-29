@@ -97,10 +97,10 @@ class ManagedConfigSupportInstrumentedTest {
         putString("my_string_key", "visible")
       }
 
-    assertEquals("secret-token", formatValueForKey("my_hidden_key", bundle.getString("my_hidden_key")))
-    assertEquals("visible", formatValueForKey("my_string_key", bundle.getString("my_string_key")))
+    assertEquals("secret-token", formatValueForDisplay(bundle.getString("my_hidden_key")))
+    assertEquals("visible", formatValueForDisplay(bundle.getString("my_string_key")))
 
-    val rendered = formatBundleRedacted(bundle)
+    val rendered = formatBundleAsStructuredJson(bundle)
     assertTrue(rendered.contains("\"my_hidden_key\": \"secret-token\""))
     assertTrue(rendered.contains("\"my_string_key\": \"visible\""))
   }

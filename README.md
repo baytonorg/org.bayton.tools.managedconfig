@@ -57,8 +57,8 @@ Implementation-wise, the app needs to do three things consistently:
 1. Show the **raw received** runtime shape honestly.
 2. Detect whether array items were delivered **directly** or under a
    **wrapper bundle key**.
-3. Normalize both variants to the same resolved form output, while still
-   highlighting which variant was received.
+3. Show a **best-practice-aligned reconstructed JSON view** alongside the raw
+   runtime structure, while still highlighting which variant was received.
 
 > Managed configurations let an IT admin remotely set values that an app reads
 > via `RestrictionsManager.getApplicationRestrictions()`. The app declares the
@@ -78,8 +78,11 @@ Implementation-wise, the app needs to do three things consistently:
 | Language         | Kotlin (Jetpack Compose UI)        |
 | Build system     | Gradle (Kotlin DSL), AGP 9.x       |
 
-The app declares no runtime permissions, has no network code, and exports only
-the launcher activity.
+The app requests no runtime-granted permissions, has no network code, and
+exports only the launcher activity. It does declare
+`QUERY_ALL_PACKAGES` for the installed-app schema import feature, because it
+needs package visibility to discover candidate apps and read their manifest
+managed-config schemas via `RestrictionsManager.getManifestRestrictions()`.
 
 ## Building
 
@@ -100,6 +103,18 @@ For unit tests:
 ```bash
 ./gradlew testDebugUnitTest
 ```
+
+For lint plus a debug build:
+
+```bash
+./gradlew lintDebug assembleDebug
+```
+
+This repository intentionally disables JVM tiered compilation in
+`gradle.properties`. That is a stability workaround for a Temurin 17 /
+Apple Silicon crash seen during lint's Kotlin/UAST analysis; without it,
+`lintDebug` could crash inside the Gradle JVM even when the project sources
+were clean.
 
 For instrumented tests on a connected device or emulator:
 
@@ -146,7 +161,7 @@ reconstruction rather than treat the sample payloads as secrets.
 
 The main screen has two tabs:
 
-### `RestrictionsManager` tab
+### `EMM validation` tab
 
 Reflects exactly what
 [`RestrictionsManager.getApplicationRestrictions()`](https://developer.android.com/reference/android/content/RestrictionsManager#getApplicationRestrictions())
@@ -155,8 +170,10 @@ returned on the most recent refresh. It shows:
 - Whether managed config has been received at all
 - The timestamp of the latest refresh
 - Per-key entries with the received value rendered with its declared type
-- A reconstructed JSON view inferred from the runtime Parcelable payload
 - The raw runtime `Bundle` / `Parcelable[]` structure before normalization
+- A reconstructed JSON view aligned with Google's preferred shape, inferred
+  from the runtime payload and highlighted when it differs from what the EMM
+  actually delivered
 - The local status of the most recent keyed app state feedback send attempt,
   when managed config is actually present
 
@@ -164,11 +181,12 @@ The app refreshes restrictions in `onResume()` and on the
 [`Intent.ACTION_APPLICATION_RESTRICTIONS_CHANGED`](https://developer.android.com/reference/android/content/Intent#ACTION_APPLICATION_RESTRICTIONS_CHANGED)
 broadcast, in line with the Android documentation's recommended pattern.
 
-### `Local simulation` tab
+### `Local validation` tab
 
-Lets you paste a JSON payload and inspect it as a completely separate local
-simulation, so you can experiment with payload shapes without involving a DPC
-or conflating the result with `RestrictionsManager`. Two formats are supported:
+Lets you pick an installed app, import its manifest-declared managed-config
+schema, and then paste a JSON payload for local validation without involving a
+DPC or conflating the result with `RestrictionsManager`. Two formats are
+supported:
 
 - **Unflattened**: standard nested JSON, e.g.
   ```json
@@ -191,10 +209,11 @@ The two formats cannot be mixed in a single payload — the app rejects mixed
 input with an explicit error. Defensive limits apply: 32 KB max input, max
 nesting depth 8, max array length 32, max bundle-array index 31.
 
-The simulation tab does **not** merge on top of the real managed config
-anymore. It shows only the parsed local payload, its reconstructed JSON view,
-and its `Bundle` / `Parcelable[]` representation. To compare real delivery and
-local simulation, swipe between the two tabs.
+The validation tab does **not** merge on top of the real managed config
+anymore. It shows only the parsed local payload, the imported target app
+schema, its reconstructed JSON view, and its `Bundle` / `Parcelable[]`
+representation. To compare real delivery and local validation, swipe between
+the two tabs.
 
 ## Testing managed config delivery
 
@@ -217,7 +236,7 @@ is the canonical EMM UI; if you implement it, this app's schema renders
 correctly there too.
 
 If you need to bypass an EMM altogether for an exploratory test, the
-**Local simulation** tab covers the same ground without provisioning.
+**Local validation** tab covers the same ground without provisioning.
 
 ## Keyed app state feedback
 
@@ -266,8 +285,9 @@ app/
     MainActivity.kt              — Activity wiring, RestrictionsManager refresh,
                                    broadcast receiver, debug-only intent injection
     ManagedConfigScreen.kt       — Compose UI (two-tab screen, rendering, inputs)
-    ManagedConfigSupport.kt      — JSON ↔ Bundle parser, redaction, format
-                                   detection, runtime structure rendering
+    ManagedConfigSupport.kt      — JSON ↔ Bundle parser, reconstructed JSON
+                                   formatter, format detection, runtime
+                                   structure rendering
     EnterpriseFeedbackSupport.kt — Keyed app state construction, signature
                                    stability, type validation
   src/main/res/
@@ -277,9 +297,6 @@ app/
   src/test/                      — Robolectric unit tests
   src/androidTest/               — Instrumented tests (UI Automator + JUnit)
 ```
-
-## Screenshots
-
 
 ## License
 

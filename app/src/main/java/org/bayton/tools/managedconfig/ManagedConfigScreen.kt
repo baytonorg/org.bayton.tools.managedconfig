@@ -1,39 +1,54 @@
 package org.bayton.tools.managedconfig
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,13 +57,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import org.bayton.tools.managedconfig.theme.BaytonManagedConfigTheme
 import kotlinx.coroutines.launch
+import android.widget.ImageView
 
 private const val RESTRICTIONS_MANAGER_TAB = 0
 private const val LOCAL_SIMULATION_TAB = 1
@@ -61,27 +81,26 @@ fun ManagedConfigScreen(
   onApplyLocalOverride: (String) -> Unit,
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
+  onLoadInvalidSampleOverride: () -> Unit,
+  onSelectImportedSchemaPackage: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var editorValue by remember(uiState.localOverrideJson) { mutableStateOf(uiState.localOverrideJson) }
   val pagerState = rememberPagerState(initialPage = RESTRICTIONS_MANAGER_TAB, pageCount = { 2 })
   val coroutineScope = rememberCoroutineScope()
 
-  Surface(
+  Column(
     modifier =
       modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background),
-    color = MaterialTheme.colorScheme.background,
+        .background(MaterialTheme.colorScheme.surface)
+        .imePadding(),
   ) {
-    Column(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .safeDrawingPadding()
-          .navigationBarsPadding(),
-    ) {
-      PrimaryTabRow(selectedTabIndex = pagerState.currentPage) {
+      PrimaryTabRow(
+        selectedTabIndex = pagerState.currentPage,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onBackground,
+      ) {
         Tab(
           selected = pagerState.currentPage == RESTRICTIONS_MANAGER_TAB,
           onClick = {
@@ -89,7 +108,7 @@ fun ManagedConfigScreen(
               pagerState.animateScrollToPage(RESTRICTIONS_MANAGER_TAB)
             }
           },
-          text = { Text("RestrictionsManager") },
+          text = { Text("EMM validation") },
         )
         Tab(
           selected = pagerState.currentPage == LOCAL_SIMULATION_TAB,
@@ -98,7 +117,7 @@ fun ManagedConfigScreen(
               pagerState.animateScrollToPage(LOCAL_SIMULATION_TAB)
             }
           },
-          text = { Text("Local simulation") },
+          text = { Text("Local validation") },
         )
       }
 
@@ -113,10 +132,9 @@ fun ManagedConfigScreen(
               knownConfigs = knownConfigs,
             )
 
-          else ->
+          LOCAL_SIMULATION_TAB ->
             LocalSimulationPage(
               uiState = uiState,
-              knownConfigs = knownConfigs,
               editorValue = editorValue,
               onEditorValueChange = { editorValue = it },
               onApplyLocalOverride = { onApplyLocalOverride(editorValue) },
@@ -125,7 +143,128 @@ fun ManagedConfigScreen(
                 onClearLocalOverride()
               },
               onLoadSampleOverride = onLoadSampleOverride,
+              onLoadInvalidSampleOverride = onLoadInvalidSampleOverride,
+              onSelectImportedSchemaPackage = onSelectImportedSchemaPackage,
             )
+
+          else -> error("Unsupported page index")
+        }
+      }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ValidationSchemaPickerCard(
+  importableApps: List<InstalledAppOption>,
+  selectedImportedAppPackage: String?,
+  onSelectImportedSchemaPackage: (String) -> Unit,
+) {
+  var filter by remember(importableApps) { mutableStateOf("") }
+  var expanded by remember { mutableStateOf(false) }
+  val selectedApp = importableApps.firstOrNull { it.packageName == selectedImportedAppPackage }
+  val filteredApps =
+    importableApps.filter { app ->
+      filter.isBlank() ||
+        app.label.contains(filter, ignoreCase = true) ||
+        app.packageName.contains(filter, ignoreCase = true)
+    }.take(8)
+
+  Card(
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    shape = RoundedCornerShape(20.dp),
+  ) {
+    Column(
+      modifier = Modifier.padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text(
+        text = "Validation target",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Text(
+        text = "Select an installed app to import its manifest-declared managed-config schema. The local JSON below will be validated and rendered against that schema.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+      )
+      if (selectedApp != null) {
+        DashboardLine(
+          label = "Selected",
+          value = "${selectedApp.label} (${selectedApp.packageName})",
+          contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+      }
+      ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+      ) {
+        OutlinedTextField(
+          value = filter,
+          onValueChange = {
+            filter = it
+            expanded = true
+          },
+          modifier =
+            Modifier
+              .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable)
+              .fillMaxWidth(),
+          label = { Text("Search apps") },
+          placeholder = { Text("Type app name or package") },
+          singleLine = true,
+          trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+          colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+        )
+        ExposedDropdownMenu(
+          expanded = expanded && filteredApps.isNotEmpty(),
+          onDismissRequest = { expanded = false },
+          modifier =
+            Modifier.background(
+              color = MaterialTheme.colorScheme.surface,
+              shape = RoundedCornerShape(16.dp),
+            ),
+        ) {
+          filteredApps.forEach { app ->
+            DropdownMenuItem(
+              text = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                  Text(
+                    text = app.label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                  )
+                  Text(
+                    text = app.packageName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              },
+              onClick = {
+                filter = app.label
+                expanded = false
+                onSelectImportedSchemaPackage(app.packageName)
+              },
+              leadingIcon = {
+                app.icon?.let { drawable ->
+                  AndroidView(
+                    factory = { context ->
+                      ImageView(context).apply {
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        setImageDrawable(drawable)
+                      }
+                    },
+                    update = { imageView ->
+                      imageView.setImageDrawable(drawable)
+                    },
+                    modifier = Modifier.size(28.dp),
+                  )
+                }
+              },
+            )
+          }
         }
       }
     }
@@ -142,6 +281,13 @@ private fun RestrictionsManagerPage(
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
+    item {
+      PageIntroCard(
+        title = "EMM validation",
+        body = "Review the live RestrictionsManager payload, inspect the delivered Bundle / Parcelable structure, and confirm keyed app states were sent to the enterprise feedback channel.",
+      )
+    }
+
     item {
       RestrictionsManagerStatusCard(
         hasManagedConfig = uiState.hasManagedConfig,
@@ -162,17 +308,18 @@ private fun RestrictionsManagerPage(
 
     item {
       PayloadCard(
-        title = "Reconstructed JSON payload",
-        subtitle = "Android does not receive JSON directly, so this is inferred from the Parcelable payload.",
-        rawPayload = uiState.managedPayload,
+        title = "Managed runtime Bundle / Parcelable preview",
+        subtitle = "Raw delivered runtime structure before normalization.",
+        rawPayload = uiState.managedRuntimePayload,
       )
     }
 
     item {
       PayloadCard(
-        title = "Managed runtime Bundle / Parcelable preview",
-        subtitle = "Raw delivered runtime structure before normalization.",
-        rawPayload = uiState.managedRuntimePayload,
+        title = "Reconstructed JSON payload",
+        subtitle = "Reconstructed JSON payload aligned with Google best practices. May not match received config exactly. Review this version against the runtime Bundle / Parcelable preview above.",
+        rawPayload = uiState.managedPayload,
+        highlighted = uiState.managedPayloadNormalizedDifference,
       )
     }
   }
@@ -181,56 +328,118 @@ private fun RestrictionsManagerPage(
 @Composable
 private fun LocalSimulationPage(
   uiState: ManagedConfigUiState,
-  knownConfigs: List<ManagedConfigDefinition>,
   editorValue: String,
   onEditorValueChange: (String) -> Unit,
   onApplyLocalOverride: () -> Unit,
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
+  onLoadInvalidSampleOverride: () -> Unit,
+  onSelectImportedSchemaPackage: (String) -> Unit,
 ) {
-  LazyColumn(
-    modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(16.dp),
-    verticalArrangement = Arrangement.spacedBy(16.dp),
+  val listState = rememberLazyListState()
+  val coroutineScope = rememberCoroutineScope()
+  val showScrollToTop by remember {
+    derivedStateOf {
+      listState.firstVisibleItemIndex > 1 || listState.firstVisibleItemScrollOffset > 200
+    }
+  }
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize(),
   ) {
-    item {
-      LocalSimulationStatusCard(
-        localOverrideActive = uiState.localOverrideActive,
-        localOverrideFormat = uiState.localOverrideFormat,
-        localShapeHighlights = uiState.localShapeHighlights,
-        effectiveConfiguredCount = uiState.effectiveConfiguredCount,
-        supportedCount = knownConfigs.size,
-        source = uiState.source,
-        updatedAt = uiState.updatedAt,
-      )
+    LazyColumn(
+      state = listState,
+      modifier = Modifier.fillMaxSize(),
+      contentPadding = PaddingValues(16.dp),
+      verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+      item {
+        PageIntroCard(
+          title = "Local validation",
+          body = "Import an installed app schema, apply local JSON, and compare how different JSON shapes reconstruct into Android-style Bundle / Parcelable data without involving an EMM.",
+        )
+      }
+
+      item {
+        LocalSimulationStatusCard(
+          localOverrideActive = uiState.localOverrideActive,
+          localOverrideFormat = uiState.localOverrideFormat,
+          selectedImportedAppLabel = uiState.selectedImportedAppLabel,
+          selectedImportedAppPackage = uiState.selectedImportedAppPackage,
+          configuredCount = uiState.localValidationConfiguredCount,
+          supportedCount = uiState.localValidationSupportedCount,
+          importedSchemaError = uiState.importedSchemaError,
+          updatedAt = uiState.updatedAt,
+        )
+      }
+
+      item {
+        ValidationSchemaPickerCard(
+          importableApps = uiState.importableApps,
+          selectedImportedAppPackage = uiState.selectedImportedAppPackage,
+          onSelectImportedSchemaPackage = onSelectImportedSchemaPackage,
+        )
+      }
+
+      item {
+        LocalOverrideCard(
+          editorValue = editorValue,
+          onEditorValueChange = onEditorValueChange,
+          onApplyLocalOverride = onApplyLocalOverride,
+          onClearLocalOverride = onClearLocalOverride,
+          onLoadSampleOverride = onLoadSampleOverride,
+          onLoadInvalidSampleOverride = onLoadInvalidSampleOverride,
+          localOverrideFormat = uiState.localOverrideFormat,
+          error = uiState.localOverrideError,
+        )
+      }
+
+      if (uiState.selectedImportedAppPackage == null) {
+        item {
+          EmptyValidationTargetCard()
+        }
+      } else {
+        items(uiState.localValidationItems, key = { item -> item.key }) { item ->
+          EffectiveConfigCard(item = item)
+        }
+      }
+
+      item {
+        PayloadCard(title = "Local applied Bundle / Parcelable preview", rawPayload = uiState.effectiveRuntimePayload)
+      }
+
+      item {
+        PayloadCard(
+          title = "Reconstructed JSON payload",
+          subtitle = "Reconstructed JSON payload aligned with Google best practices. May not match submitted JSON. If your configuration errors above, review this version for differences.",
+          rawPayload = uiState.effectivePayload,
+          highlighted = uiState.effectivePayloadNormalizedDifference,
+        )
+      }
     }
 
-    item {
-      LocalOverrideCard(
-        editorValue = editorValue,
-        onEditorValueChange = onEditorValueChange,
-        onApplyLocalOverride = onApplyLocalOverride,
-        onClearLocalOverride = onClearLocalOverride,
-        onLoadSampleOverride = onLoadSampleOverride,
-        localOverrideFormat = uiState.localOverrideFormat,
-        error = uiState.localOverrideError,
-      )
-    }
-
-    items(uiState.effectiveItems, key = { item -> item.key }) { item ->
-      EffectiveConfigCard(item = item)
-    }
-
-    item {
-      PayloadCard(
-        title = "Reconstructed JSON payload",
-        subtitle = "Reverse-mapped JSON from the Parcelable payload. Check it matches the JSON provided.",
-        rawPayload = uiState.effectivePayload,
-      )
-    }
-
-    item {
-      PayloadCard(title = "Local simulation Bundle / Parcelable preview", rawPayload = uiState.effectiveRuntimePayload)
+    if (showScrollToTop) {
+      FloatingActionButton(
+        onClick = {
+          coroutineScope.launch {
+            listState.animateScrollToItem(0)
+          }
+        },
+        modifier =
+          Modifier
+            .align(Alignment.BottomEnd)
+            .padding(16.dp)
+            .size(44.dp),
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+      ) {
+        Icon(
+          imageVector = Icons.Filled.KeyboardArrowUp,
+          contentDescription = "Scroll to top",
+        )
+      }
     }
   }
 }
@@ -249,28 +458,28 @@ private fun RestrictionsManagerStatusCard(
 ) {
   val containerColor =
     if (hasManagedConfig) {
-      org.bayton.tools.managedconfig.theme.BaytonGreen
+      MaterialTheme.colorScheme.secondary
     } else {
-      MaterialTheme.colorScheme.secondaryContainer
+      MaterialTheme.colorScheme.primaryContainer
     }
   val contentColor =
     if (hasManagedConfig) {
-      androidx.compose.ui.graphics.Color.White
+      Color.White
     } else {
-      MaterialTheme.colorScheme.onSecondaryContainer
+      MaterialTheme.colorScheme.onPrimaryContainer
     }
 
   Card(
     colors = CardDefaults.cardColors(containerColor = containerColor),
-    shape = RoundedCornerShape(28.dp),
+    shape = RoundedCornerShape(20.dp),
   ) {
     Column(
       modifier = Modifier.padding(20.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Text(
-        text = if (hasManagedConfig) "Managed config received from RestrictionsManager" else "No managed config from RestrictionsManager",
-        style = MaterialTheme.typography.headlineSmall,
+        text = if (hasManagedConfig) "Managed config received" else "No managed config received",
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
         color = contentColor,
       )
@@ -279,18 +488,16 @@ private fun RestrictionsManagerStatusCard(
         value = "$managedConfiguredCount keys across $supportedCount features",
         contentColor = contentColor,
       )
-      if (hasManagedConfig && keyedAppStatesStatus != "No keyed app states reported yet") {
-        DashboardLine(
-          label = "Feedback",
-          value =
-            if (keyedAppStatesUpdatedAt.isNotBlank()) {
-              "${keyedAppStatesStatus.removePrefix("Reported ").removeSuffix(".")} @ $keyedAppStatesUpdatedAt"
-            } else {
-              keyedAppStatesStatus.removePrefix("Reported ").removeSuffix(".")
-            },
-          contentColor = contentColor,
-        )
-      }
+      DashboardLine(
+        label = "Feedback",
+        value =
+          if (keyedAppStatesUpdatedAt.isNotBlank()) {
+            "${keyedAppStatesStatus.removePrefix("Reported ").removeSuffix(".")} @ $keyedAppStatesUpdatedAt"
+          } else {
+            keyedAppStatesStatus.removePrefix("Reported ").removeSuffix(".")
+          },
+        contentColor = contentColor,
+      )
       if (updatedAt.isNotBlank()) {
         DashboardLine(
           label = "Updated",
@@ -306,42 +513,125 @@ private fun RestrictionsManagerStatusCard(
 private fun LocalSimulationStatusCard(
   localOverrideActive: Boolean,
   localOverrideFormat: String,
-  localShapeHighlights: List<String>,
-  effectiveConfiguredCount: Int,
+  selectedImportedAppLabel: String?,
+  selectedImportedAppPackage: String?,
+  configuredCount: Int,
   supportedCount: Int,
-  source: String,
+  importedSchemaError: String?,
   updatedAt: String,
 ) {
+  val containerColor =
+    if (localOverrideActive) {
+      MaterialTheme.colorScheme.secondaryContainer
+    } else {
+      MaterialTheme.colorScheme.primaryContainer
+    }
+  val contentColor =
+    if (localOverrideActive) {
+      MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+      MaterialTheme.colorScheme.onPrimaryContainer
+    }
+
   Card(
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-    shape = RoundedCornerShape(28.dp),
+    colors = CardDefaults.cardColors(containerColor = containerColor),
+    shape = RoundedCornerShape(20.dp),
   ) {
     Column(
       modifier = Modifier.padding(20.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Text(
-        text = if (localOverrideActive) "Local simulation active" else "Local simulation inactive",
-        style = MaterialTheme.typography.headlineSmall,
+        text = if (localOverrideActive) "Validation payload active" else "Validation payload inactive",
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
+        color = contentColor,
+      )
+      DashboardLine(
+        label = "App",
+        value =
+          if (selectedImportedAppLabel != null && selectedImportedAppPackage != null) {
+            "$selectedImportedAppLabel (${selectedImportedAppPackage})"
+          } else {
+            "Select an installed app to validate"
+          },
+        contentColor = contentColor,
       )
       DashboardLine(
         label = "Coverage",
-        value = "$effectiveConfiguredCount keys across $supportedCount features",
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        value = "$configuredCount keys across $supportedCount fields",
+        contentColor = contentColor,
       )
       DashboardLine(
         label = "Shape",
         value = localOverrideFormat,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        contentColor = contentColor,
       )
+      if (!importedSchemaError.isNullOrBlank()) {
+        DashboardLine(
+          label = "Schema",
+          value = importedSchemaError,
+          contentColor = contentColor,
+        )
+      }
       if (updatedAt.isNotBlank()) {
         DashboardLine(
           label = "Updated",
           value = updatedAt,
-          contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+          contentColor = contentColor,
         )
       }
+    }
+  }
+}
+
+@Composable
+private fun EmptyValidationTargetCard() {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    shape = RoundedCornerShape(20.dp),
+  ) {
+    Column(
+      modifier = Modifier.padding(20.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Text(
+        text = "Select an app to validate",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Text(
+        text = "Choose an installed app above to import its schema, or tap Load sample to select Managed Config Tool and populate its sample payload.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+      )
+    }
+  }
+}
+
+@Composable
+private fun PageIntroCard(
+  title: String,
+  body: String,
+) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    shape = RoundedCornerShape(20.dp),
+  ) {
+    Column(
+      modifier = Modifier.padding(20.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Text(
+        text = body,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+      )
     }
   }
 }
@@ -362,7 +652,8 @@ private fun ManagedConfigCard(item: ManagedConfigItem) {
     }
   Card(
     colors = CardDefaults.cardColors(containerColor = containerColor),
-    shape = RoundedCornerShape(24.dp),
+    shape = RoundedCornerShape(20.dp),
+    modifier = Modifier.padding(start = (item.depth * 12).dp),
   ) {
     Column(
       modifier = Modifier.padding(18.dp),
@@ -370,7 +661,7 @@ private fun ManagedConfigCard(item: ManagedConfigItem) {
     ) {
       Text(
         text = item.title,
-        style = MaterialTheme.typography.titleLarge,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
         color = contentColor,
       )
@@ -379,6 +670,7 @@ private fun ManagedConfigCard(item: ManagedConfigItem) {
         style = MaterialTheme.typography.bodyMedium,
         color = contentColor,
       )
+      TypeChip(typeLabel = item.typeLabel, contentColor = contentColor)
       if (item.managedHasSchemaError && !item.managedSchemaChipLabel.isNullOrBlank()) {
         AssistChip(
           onClick = {},
@@ -408,7 +700,7 @@ private fun ManagedConfigCard(item: ManagedConfigItem) {
       }
       HorizontalDivider()
       if (item.isManagedConfigured) {
-        PayloadText(formatPayloadWithKey(item.key, item.managedValue))
+        PayloadText(formatPayloadWithKey(item.payloadKey, item.managedValue))
       } else {
         Text(
           text = "No configuration received",
@@ -436,7 +728,8 @@ private fun EffectiveConfigCard(item: ManagedConfigItem) {
     }
   Card(
     colors = CardDefaults.cardColors(containerColor = containerColor),
-    shape = RoundedCornerShape(24.dp),
+    shape = RoundedCornerShape(20.dp),
+    modifier = Modifier.padding(start = (item.depth * 12).dp),
   ) {
     Column(
       modifier = Modifier.padding(18.dp),
@@ -444,7 +737,7 @@ private fun EffectiveConfigCard(item: ManagedConfigItem) {
     ) {
       Text(
         text = item.title,
-        style = MaterialTheme.typography.titleLarge,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
         color = contentColor,
       )
@@ -453,6 +746,7 @@ private fun EffectiveConfigCard(item: ManagedConfigItem) {
         style = MaterialTheme.typography.bodyMedium,
         color = contentColor,
       )
+      TypeChip(typeLabel = item.typeLabel, contentColor = contentColor)
       if (item.effectiveHasSchemaError && !item.effectiveSchemaChipLabel.isNullOrBlank()) {
         AssistChip(
           onClick = {},
@@ -470,7 +764,7 @@ private fun EffectiveConfigCard(item: ManagedConfigItem) {
       }
       if (item.effectiveHasSchemaError && !item.effectiveSchemaMessage.isNullOrBlank()) {
         Text(
-          text = "Google expects direct bundle_array item bundles. This simulation includes an extra bundle key inside each item.",
+        text = "Google expects direct bundle_array item bundles. This validation payload includes an extra bundle key inside each item.",
           style = MaterialTheme.typography.bodyMedium,
           color = contentColor,
         )
@@ -482,7 +776,7 @@ private fun EffectiveConfigCard(item: ManagedConfigItem) {
       }
       HorizontalDivider()
       if (item.isEffectiveConfigured) {
-        PayloadText(formatPayloadWithKey(item.key, item.effectiveValue))
+        PayloadText(formatPayloadWithKey(item.payloadKey, item.effectiveValue))
       } else {
         Text(
           text = "No configuration received",
@@ -501,34 +795,35 @@ private fun LocalOverrideCard(
   onApplyLocalOverride: () -> Unit,
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
+  onLoadInvalidSampleOverride: () -> Unit,
   localOverrideFormat: String,
   error: String?,
 ) {
   Card(
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-    shape = RoundedCornerShape(24.dp),
+    shape = RoundedCornerShape(20.dp),
   ) {
     Column(
       modifier = Modifier.padding(18.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Text(
-        text = "Simulation input",
-        style = MaterialTheme.typography.titleLarge,
+        text = "Validation input",
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
       )
       Text(
-        text = "Paste JSON here to simulate app restrictions locally for QA. Google runtime managed config reaches the app as unflattened Bundle / Parcelable data. This simulator accepts either unflattened nested JSON or flattened keys such as my_bundle_key.my_string_key_in_bundle and my_bundle_array_key[0].my_string_key_in_bundle_array.",
+        text = "Paste JSON here to validate app restrictions locally for QA. Google runtime managed config reaches the app as unflattened Bundle / Parcelable data. This validator accepts either unflattened nested JSON or flattened keys such as my_bundle_key.my_string_key_in_bundle and my_bundle_array_key[0].my_string_key_in_bundle_array.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
       )
       Text(
-        text = "Simulation is session-only and clears when the process is restarted.",
+        text = "Validation input is session-only and clears when the process is restarted.",
         style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.tertiary,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
       )
       Text(
-        text = "Detected simulation format: $localOverrideFormat",
+        text = "Detected validation format: $localOverrideFormat",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.secondary,
       )
@@ -556,14 +851,41 @@ private fun LocalOverrideCard(
         Button(onClick = onApplyLocalOverride) {
           Text("Apply")
         }
-        TextButton(onClick = onLoadSampleOverride) {
-          Text("Load sample")
-        }
+        LongPressTextButton(
+          text = "Load sample",
+          onClick = onLoadSampleOverride,
+          onLongClick = onLoadInvalidSampleOverride,
+        )
         TextButton(onClick = onClearLocalOverride) {
           Text("Clear")
         }
       }
     }
+  }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LongPressTextButton(
+  text: String,
+  onClick: () -> Unit,
+  onLongClick: () -> Unit,
+) {
+  Box(
+    modifier =
+      Modifier
+        .clip(RoundedCornerShape(20.dp))
+        .combinedClickable(
+          onClick = onClick,
+          onLongClick = onLongClick,
+        )
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelLarge,
+      color = MaterialTheme.colorScheme.primary,
+    )
   }
 }
 
@@ -580,10 +902,23 @@ private fun PayloadLabel(
 }
 
 @Composable
-private fun PayloadCard(title: String, rawPayload: String, subtitle: String? = null) {
+private fun PayloadCard(
+  title: String,
+  rawPayload: String,
+  subtitle: String? = null,
+  highlighted: Boolean = false,
+) {
   Card(
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    shape = RoundedCornerShape(24.dp),
+    colors =
+      CardDefaults.cardColors(
+        containerColor =
+          if (highlighted) {
+            MaterialTheme.colorScheme.secondary.copy(alpha = 0.14f)
+          } else {
+            MaterialTheme.colorScheme.primaryContainer
+          },
+      ),
+    shape = RoundedCornerShape(20.dp),
   ) {
     Column(
       modifier = Modifier.padding(18.dp),
@@ -598,7 +933,7 @@ private fun PayloadCard(title: String, rawPayload: String, subtitle: String? = n
         Text(
           text = subtitle,
           style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.outline,
+          color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
       }
       PayloadText(rawPayload)
@@ -619,6 +954,26 @@ private fun formatPayloadWithKey(key: String, payload: String): String {
       append(line)
       if (index != lines.lastIndex) append('\n')
     }
+  }
+}
+
+@Composable
+private fun TypeChip(typeLabel: String, contentColor: Color) {
+  Box(
+    modifier =
+      Modifier
+        .border(
+          width = 1.dp,
+          color = contentColor.copy(alpha = 0.2f),
+          shape = RoundedCornerShape(999.dp),
+        ).padding(horizontal = 10.dp, vertical = 6.dp),
+  ) {
+    Text(
+      text = typeLabel,
+      style = MaterialTheme.typography.labelMedium,
+      fontFamily = FontFamily.Monospace,
+      color = contentColor,
+    )
   }
 }
 
@@ -656,8 +1011,8 @@ private fun PayloadText(text: String) {
       Modifier
         .fillMaxWidth()
         .background(
-          color = MaterialTheme.colorScheme.background,
-          shape = RoundedCornerShape(18.dp),
+          color = MaterialTheme.colorScheme.surface,
+          shape = RoundedCornerShape(16.dp),
         ).horizontalScroll(scrollState)
         .padding(14.dp),
   ) {
@@ -688,6 +1043,7 @@ private fun ManagedConfigScreenPreview() {
                 key = "my_bool_key",
                 title = "My BOOL",
                 description = "Boolean baseline managed configuration.",
+                typeLabel = "bool",
                 isManagedConfigured = true,
                 isEffectiveConfigured = true,
                 managedValue = "true",
@@ -700,6 +1056,7 @@ private fun ManagedConfigScreenPreview() {
                 key = "my_bool_key",
                 title = "My BOOL",
                 description = "Boolean baseline managed configuration.",
+                typeLabel = "bool",
                 isManagedConfigured = true,
                 isEffectiveConfigured = true,
                 managedValue = "true",
@@ -709,6 +1066,7 @@ private fun ManagedConfigScreenPreview() {
                 key = "my_bundle_key",
                 title = "My BUNDLE",
                 description = "Nested managed configuration bundle.",
+                typeLabel = "bundle",
                 isManagedConfigured = false,
                 isEffectiveConfigured = true,
                 managedValue = "Not set by RestrictionsManager",
@@ -719,6 +1077,8 @@ private fun ManagedConfigScreenPreview() {
           managedPayload = "{\n  \"my_bool_key\": true\n}",
           effectiveRuntimePayload = "Bundle {\n  my_bool_key = true\n}",
           managedRuntimePayload = "Bundle {\n  my_bool_key = true\n}",
+          effectivePayloadNormalizedDifference = false,
+          managedPayloadNormalizedDifference = false,
           managedPayloadFormat = "Google runtime bundle / parcelable format",
           localOverrideJson = "{\n  \"my_bool_key\": true\n}",
           localOverrideActive = true,
@@ -730,6 +1090,8 @@ private fun ManagedConfigScreenPreview() {
       onApplyLocalOverride = {},
       onClearLocalOverride = {},
       onLoadSampleOverride = {},
+      onLoadInvalidSampleOverride = {},
+      onSelectImportedSchemaPackage = {},
     )
   }
 }

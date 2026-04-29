@@ -1,5 +1,6 @@
 package org.bayton.tools.managedconfig
 
+import android.content.RestrictionEntry
 import android.os.Bundle
 import android.os.Parcelable
 import org.junit.Assert.assertArrayEquals
@@ -366,5 +367,97 @@ class ManagedConfigSupportUnitTest {
 
     assertFalse(uiState.localOverrideActive)
     assertEquals("Parse failed", uiState.localOverrideError)
+  }
+
+  @Test
+  fun importedBundleArraySchemaSkipsTemplateWrapperAndExposesLeafFields() {
+    val boolChild = RestrictionEntry("my_bool_key_in_bundle_array", false).apply { setTitle("Show intro card") }
+    val stringChild = RestrictionEntry("my_string_key_in_bundle_array", "").apply { setTitle("Intro text") }
+    val wrapperBundle =
+      RestrictionEntry.createBundleEntry(
+        "my_bundle_array_item",
+        arrayOf(boolChild, stringChild),
+      ).apply { setTitle("Array item") }
+    val bundleArray =
+      RestrictionEntry.createBundleArrayEntry(
+        "my_bundle_array_key",
+        arrayOf(wrapperBundle),
+      ).apply { setTitle("Intro cards") }
+
+    val definitions = bundleArray.toManagedConfigDefinitions()
+
+    assertTrue(definitions.any { it.key == "my_bundle_array_key" && it.type == ManagedConfigValueType.BUNDLE_ARRAY })
+    assertTrue(
+      definitions.any {
+        it.key == "my_bundle_array_key[].my_bool_key_in_bundle_array" &&
+          it.payloadKey == "my_bundle_array_key" &&
+          it.depth == 1 &&
+          it.type == ManagedConfigValueType.BOOL
+      },
+    )
+    assertFalse(definitions.any { it.key.contains("my_bundle_array_item") })
+  }
+
+  @Test
+  fun localValidationItemsOnlyFlagWrappedBundleArrayAtParentCard() {
+    val parsed =
+      parseJsonBundle(
+        """
+        {
+          "my_bundle_array_key": [
+            {
+              "my_bundle_array_item": {
+                "my_string_key_in_bundle_array": "wrapped-json-item",
+                "my_bool_key_in_bundle_array": true
+              }
+            }
+          ]
+        }
+        """.trimIndent(),
+      )
+
+    val importedDefinitions =
+      RestrictionEntry
+        .createBundleArrayEntry(
+          "my_bundle_array_key",
+          arrayOf(
+            RestrictionEntry.createBundleEntry(
+              "my_bundle_array_item",
+              arrayOf(
+                RestrictionEntry("my_bool_key_in_bundle_array", false).apply { setTitle("Show intro card") },
+              ),
+            ),
+          ),
+        ).toManagedConfigDefinitions()
+
+    val uiState =
+      buildUiState(
+        effectiveRestrictions = parsed.bundle,
+        managedRestrictions = Bundle(),
+        rawManagedRestrictions = Bundle(),
+        managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
+        managedShapeHighlights = emptyList(),
+        localOverrideJson = "{}",
+        localOverrideFormat = parsed.format.label,
+        localShapeHighlights = listOf("my_bundle_array_key: wrapper key my_bundle_array_item"),
+        keyedAppStatesStatus = "No keyed app states reported yet",
+        keyedAppStatesUpdatedAt = "",
+        source = "test",
+        selectedImportedApp = InstalledAppOption("Test", "com.example.test", null),
+        importedSchemaDefinitions = importedDefinitions,
+        importedSchemaError = null,
+      )
+
+    val parentItem = uiState.localValidationItems.first { it.key == "my_bundle_array_key" }
+    val childItem = uiState.localValidationItems.first { it.key == "my_bundle_array_key[].my_bool_key_in_bundle_array" }
+
+    assertTrue(parentItem.effectiveHasSchemaError)
+    assertEquals("Bundle key present", parentItem.effectiveSchemaChipLabel)
+    assertTrue(parentItem.effectiveSchemaMessage?.contains("wrapper key my_bundle_array_item") == true)
+
+    assertFalse(childItem.effectiveHasSchemaError)
+    assertEquals(null, childItem.effectiveSchemaChipLabel)
+    assertEquals(null, childItem.effectiveSchemaMessage)
+    assertTrue(childItem.effectiveValue.contains("my_bundle_array_key[0].my_bool_key_in_bundle_array: true"))
   }
 }

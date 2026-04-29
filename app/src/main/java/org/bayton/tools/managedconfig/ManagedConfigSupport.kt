@@ -143,7 +143,7 @@ fun detectOverrideFormat(rawJson: String): OverrideFormat {
   }.getOrDefault(OverrideFormat.INVALID)
 }
 
-fun formatValueForKey(key: String, value: Any?): String {
+fun formatValueForDisplay(value: Any?): String {
   return formatValue(value)
 }
 
@@ -151,13 +151,13 @@ fun formatDeliveredValueForKey(key: String, value: Any?): String {
   return formatDeliveredRuntimeValueForKey(key, value)
 }
 
-fun formatBundleRedacted(bundle: Bundle, depth: Int = 0): String {
+fun formatBundleAsStructuredJson(bundle: Bundle, depth: Int = 0): String {
   if (bundle.isEmpty) return "{}"
-  return bundleToRedactedJsonObject(bundle).toString(2)
+  return bundleToJsonObject(bundle).toString(2)
 }
 
 fun formatBundleRuntimePreview(bundle: Bundle, depth: Int = 0): String {
-  if (bundle.isEmpty) return "{}"
+  if (bundle.isEmpty) return "[]"
   return renderRuntimeBundleLines(bundle, depth).joinToString("\n")
 }
 
@@ -168,10 +168,10 @@ fun mergeBundles(base: Bundle, override: Bundle): Bundle =
     }
   }
 
-private fun formatValue(value: Any?): String =
+internal fun formatValue(value: Any?): String =
   when (value) {
     null -> "null"
-    is Bundle -> formatBundleRedacted(value)
+    is Bundle -> formatBundleAsStructuredJson(value)
     is Array<*> -> value.joinToString(prefix = "[", postfix = "]") { item -> formatValue(item) }
     is BooleanArray -> value.joinToString(prefix = "[", postfix = "]")
     is IntArray -> value.joinToString(prefix = "[", postfix = "]")
@@ -179,7 +179,7 @@ private fun formatValue(value: Any?): String =
     is FloatArray -> value.joinToString(prefix = "[", postfix = "]")
     is DoubleArray -> value.joinToString(prefix = "[", postfix = "]")
     is ArrayList<*> -> value.joinToString(prefix = "[", postfix = "]") { item -> formatValue(item) }
-    is Parcelable -> if (value is Bundle) formatBundleRedacted(value) else value.toString()
+    is Parcelable -> if (value is Bundle) formatBundleAsStructuredJson(value) else value.toString()
     else -> value.toString()
   }
 
@@ -325,7 +325,7 @@ private fun formatStructuredValue(value: Any?, depth: Int): String =
   when (value) {
     null -> "null"
     is String -> "\"${escapeJsonString(value)}\""
-    is Bundle -> formatBundleRedacted(value, depth)
+    is Bundle -> formatBundleAsStructuredJson(value, depth)
     is Array<*> -> {
       if (value.isEmpty()) {
         "[]"
@@ -346,27 +346,27 @@ private fun formatStructuredValue(value: Any?, depth: Int): String =
     else -> value.toString()
   }
 
-private fun bundleToRedactedJsonObject(bundle: Bundle): JSONObject {
+private fun bundleToJsonObject(bundle: Bundle): JSONObject {
   val jsonObject = JSONObject()
   bundle.keySet().sorted().forEach { key ->
-    val value = toRedactedJsonValue(bundle.valueForKey(key))
+    val value = toJsonValue(bundle.valueForKey(key))
     jsonObject.put(key, value)
   }
   return jsonObject
 }
 
-private fun toRedactedJsonValue(value: Any?): Any =
+private fun toJsonValue(value: Any?): Any =
   when (value) {
     null -> JSONObject.NULL
-    is Bundle -> bundleToRedactedJsonObject(value)
-    is Array<*> -> JSONArray().apply { value.forEach { put(toRedactedJsonValue(it)) } }
+    is Bundle -> bundleToJsonObject(value)
+    is Array<*> -> JSONArray().apply { value.forEach { put(toJsonValue(it)) } }
     is BooleanArray -> JSONArray().apply { value.forEach { put(it) } }
     is IntArray -> JSONArray().apply { value.forEach { put(it) } }
     is LongArray -> JSONArray().apply { value.forEach { put(it) } }
     is FloatArray -> JSONArray().apply { value.forEach { put(it.toDouble()) } }
     is DoubleArray -> JSONArray().apply { value.forEach { put(it) } }
-    is ArrayList<*> -> JSONArray().apply { value.forEach { put(toRedactedJsonValue(it)) } }
-    is Parcelable -> if (value is Bundle) bundleToRedactedJsonObject(value) else value.toString()
+    is ArrayList<*> -> JSONArray().apply { value.forEach { put(toJsonValue(it)) } }
+    is Parcelable -> if (value is Bundle) bundleToJsonObject(value) else value.toString()
     else -> value
   }
 
