@@ -1,5 +1,7 @@
 package org.bayton.tools.managedconfig
 
+import android.app.admin.DevicePolicyManager
+import android.app.admin.DevicePolicyManager.DELEGATION_APP_RESTRICTIONS
 import android.content.Context
 import android.content.RestrictionEntry
 import android.content.RestrictionsManager
@@ -12,7 +14,14 @@ import androidx.enterprise.feedback.KeyedAppStatesReporter
 interface ManagedConfigRepository {
   fun currentRestrictions(): Bundle
   suspend fun importSchema(packageName: String): List<RestrictionEntry>
+  suspend fun fetchManagedRestrictions(packageName: String): ManagedRestrictionsFetchResult
 }
+
+data class ManagedRestrictionsFetchResult(
+  val isAvailable: Boolean,
+  val bundle: Bundle = Bundle(),
+  val message: String? = null,
+)
 
 interface InstalledAppsRepository {
   suspend fun listApps(): List<InstalledAppOption>
@@ -26,14 +35,46 @@ interface KeyedAppStatesPublisher {
 class AndroidManagedConfigRepository(
   context: Context,
 ) : ManagedConfigRepository {
+  private val appContext = context.applicationContext
   private val restrictionsManager: RestrictionsManager =
-    context.applicationContext.getSystemService(RestrictionsManager::class.java)
+    appContext.getSystemService(RestrictionsManager::class.java)
+  private val devicePolicyManager: DevicePolicyManager =
+    appContext.getSystemService(DevicePolicyManager::class.java)
 
   override fun currentRestrictions(): Bundle =
     restrictionsManager.applicationRestrictions ?: Bundle()
 
   override suspend fun importSchema(packageName: String): List<RestrictionEntry> =
     restrictionsManager.getManifestRestrictions(packageName).orEmpty()
+
+  override suspend fun fetchManagedRestrictions(packageName: String): ManagedRestrictionsFetchResult {
+    if (packageName == appContext.packageName) {
+      return ManagedRestrictionsFetchResult(
+        isAvailable = true,
+        bundle = currentRestrictions(),
+      )
+    }
+
+    val scopes = devicePolicyManager.getDelegatedScopes(null, appContext.packageName)
+    if (!scopes.contains(DELEGATION_APP_RESTRICTIONS)) {
+      return ManagedRestrictionsFetchResult(
+        isAvailable = false,
+        message = "Delegated app-restrictions scope not available.",
+      )
+    }
+
+    return try {
+      ManagedRestrictionsFetchResult(
+        isAvailable = true,
+        bundle = devicePolicyManager.getApplicationRestrictions(null, packageName),
+      )
+    } catch (securityException: SecurityException) {
+      ManagedRestrictionsFetchResult(
+        isAvailable = false,
+        message = securityException.message ?: "Unable to read managed restrictions for $packageName.",
+      )
+    }
+  }
 }
 
 class AndroidInstalledAppsRepository(

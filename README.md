@@ -184,9 +184,19 @@ broadcast, in line with the Android documentation's recommended pattern.
 ### `Local validation` tab
 
 Lets you pick an installed app, import its manifest-declared managed-config
-schema, and then paste a JSON payload for local validation without involving a
-DPC or conflating the result with `RestrictionsManager`. Two formats are
-supported:
+schema, and then validate JSON against that schema locally. If this app has
+delegated app-restrictions scope and the selected target app already has
+managed config applied by an EMM, the validation editor is auto-seeded from
+that live payload as editable JSON. That seeded state is surfaced in the UI as:
+
+- **`EMM payload`** when the editor still matches the fetched payload
+- **`Overridden`** when you have edited away from the fetched payload locally
+
+Edits on this tab stay local to the validator. They do **not** push changes
+back to the target app or alter the real managed config delivered by the EMM.
+Use **Reset** to restore a seeded EMM payload, or **Clear** when no seed exists.
+
+Two JSON formats are supported:
 
 - **Unflattened**: standard nested JSON, e.g.
   ```json
@@ -210,10 +220,15 @@ input with an explicit error. Defensive limits apply: 32 KB max input, max
 nesting depth 8, max array length 32, max bundle-array index 31.
 
 The validation tab does **not** merge on top of the real managed config
-anymore. It shows only the parsed local payload, the imported target app
-schema, its reconstructed JSON view, and its `Bundle` / `Parcelable[]`
-representation. To compare real delivery and local validation, swipe between
-the two tabs.
+anymore. It shows only the currently validated local payload, the imported
+target app schema, its reconstructed JSON view, and its `Bundle` /
+`Parcelable[]` representation. To compare real delivery and local validation,
+swipe between the two tabs.
+
+When targeting this app itself (`org.bayton.tools.managedconfig`), the local
+validation tab can seed from this app's own `RestrictionsManager` payload. For
+other apps, seeded validation requires delegated app-restrictions scope so the
+app can read their applied managed config via `DevicePolicyManager`.
 
 ## Testing managed config delivery
 

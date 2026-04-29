@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -93,8 +94,7 @@ fun ManagedConfigScreen(
     modifier =
       modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.surface)
-        .imePadding(),
+        .background(MaterialTheme.colorScheme.surface),
   ) {
       PrimaryTabRow(
         selectedTabIndex = pagerState.currentPage,
@@ -371,7 +371,10 @@ private fun LocalSimulationPage(
   ) {
     LazyColumn(
       state = listState,
-      modifier = Modifier.fillMaxSize(),
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .imePadding(),
       contentPadding = PaddingValues(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -415,6 +418,8 @@ private fun LocalSimulationPage(
           onClearLocalOverride = onClearLocalOverride,
           onLoadSampleOverride = onLoadSampleOverride,
           onLoadInvalidSampleOverride = onLoadInvalidSampleOverride,
+          seedJson = uiState.localOverrideSeedJson,
+          seededFromEmmPayload = uiState.localOverrideSeededFromEmmPayload,
           localOverrideFormat = uiState.localOverrideFormat,
           error = uiState.localOverrideError,
         )
@@ -454,6 +459,8 @@ private fun LocalSimulationPage(
         modifier =
           Modifier
             .align(Alignment.BottomEnd)
+            .navigationBarsPadding()
+            .imePadding()
             .padding(16.dp)
             .size(44.dp),
         containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -826,9 +833,16 @@ private fun LocalOverrideCard(
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
   onLoadInvalidSampleOverride: () -> Unit,
+  seedJson: String?,
+  seededFromEmmPayload: Boolean,
   localOverrideFormat: String,
   error: String?,
 ) {
+  val isOverridden =
+    seededFromEmmPayload &&
+      seedJson != null &&
+      editorValue.trim() != seedJson.trim()
+
   Card(
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     shape = RoundedCornerShape(20.dp),
@@ -837,11 +851,36 @@ private fun LocalOverrideCard(
       modifier = Modifier.padding(18.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      Text(
-        text = "Validation input",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "Validation input",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.SemiBold,
+        )
+        if (seededFromEmmPayload) {
+          AssistChip(
+            onClick = {},
+            enabled = false,
+            label = {
+              Text(
+                text = if (isOverridden) "Overridden" else "EMM payload",
+                fontFamily = FontFamily.Monospace,
+              )
+            },
+            colors =
+              AssistChipDefaults.assistChipColors(
+                disabledContainerColor =
+                  if (isOverridden) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                disabledLabelColor =
+                  if (isOverridden) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+              ),
+          )
+        }
+      }
       Text(
         text = "Paste JSON here to validate app restrictions locally for QA. Google runtime managed config reaches the app as unflattened Bundle / Parcelable data. This validator accepts either unflattened nested JSON or flattened keys such as my_bundle_key.my_string_key_in_bundle and my_bundle_array_key[0].my_string_key_in_bundle_array.",
         style = MaterialTheme.typography.bodyMedium,
@@ -887,7 +926,7 @@ private fun LocalOverrideCard(
           onLongClick = onLoadInvalidSampleOverride,
         )
         TextButton(onClick = onClearLocalOverride) {
-          Text("Clear")
+          Text(if (seededFromEmmPayload) "Reset" else "Clear")
         }
       }
     }

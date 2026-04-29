@@ -47,7 +47,12 @@ class ManagedConfigScreenSmokeTest {
     launchMainActivity()
 
     openLocalValidationTab()
-    waitForAnyText("Validation target", "Select an installed app to validate")
+    waitForAnyText(
+      "Validation target",
+      "Select an installed app to validate",
+      "Loading installed apps",
+      "Loading selected app schema",
+    )
   }
 
   @Test
@@ -95,7 +100,9 @@ class ManagedConfigScreenSmokeTest {
   private fun openLocalValidationTab() {
     if (
       device.findObject(By.textContains("Validation target")) != null ||
-        device.findObject(By.textContains("Select an installed app to validate")) != null
+        device.findObject(By.textContains("Select an installed app to validate")) != null ||
+        device.findObject(By.textContains("Loading installed apps")) != null ||
+        device.findObject(By.textContains("Loading selected app schema")) != null
     ) {
       return
     }
@@ -109,7 +116,9 @@ class ManagedConfigScreenSmokeTest {
 
     if (
       device.findObject(By.textContains("Validation target")) == null &&
-        device.findObject(By.textContains("Select an installed app to validate")) == null
+        device.findObject(By.textContains("Select an installed app to validate")) == null &&
+        device.findObject(By.textContains("Loading installed apps")) == null &&
+        device.findObject(By.textContains("Loading selected app schema")) == null
     ) {
       swipeLeft()
     }
