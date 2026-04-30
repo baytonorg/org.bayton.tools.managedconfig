@@ -8,11 +8,15 @@ internal data class UiStateInputs(
   val rawManagedRestrictions: Bundle,
   val managedRuntimeStructure: String,
   val managedShapeHighlights: List<String>,
-  val localOverrideJson: String,
-  val localOverrideSeedJson: String? = null,
-  val localOverrideSeededFromEmmPayload: Boolean = false,
-  val localOverrideFormat: String?,
+  val editorJson: String,
+  val emmPayloadJson: String? = null,
+  val emmPayloadAvailable: Boolean = false,
+  val localOverrideApplied: Boolean = false,
+  val editorFormat: String?,
+  val appliedOverrideFormat: String?,
   val localShapeHighlights: List<String>,
+  val editorMatchesEmmPayload: Boolean = false,
+  val editorHasUnappliedChanges: Boolean = false,
   val keyedAppStatesStatus: String,
   val keyedAppStatesUpdatedAt: String,
   val source: String,
@@ -223,7 +227,7 @@ internal fun buildUiState(inputs: UiStateInputs): ManagedConfigUiState {
           )
         }
 
-  val localOverrideActive = inputs.localOverrideJson.isNotBlank() && inputs.localOverrideError == null
+  val localOverrideActive = inputs.localOverrideApplied
 
   val effectiveStructuredPayload = formatBundleAsStructuredJson(inputs.effectiveRestrictions)
   val managedRawStructuredPayload = formatBundleAsStructuredJson(inputs.rawManagedRestrictions)
@@ -249,12 +253,15 @@ internal fun buildUiState(inputs: UiStateInputs): ManagedConfigUiState {
     managedPayloadNormalizedDifference = managedRawStructuredPayload != managedNormalizedStructuredPayload,
     managedPayloadFormat = if (managedKeys.isNotEmpty()) inputs.managedRuntimeStructure else "No managed payload",
     managedShapeHighlights = inputs.managedShapeHighlights,
-    localOverrideJson = inputs.localOverrideJson,
-    localOverrideSeedJson = inputs.localOverrideSeedJson,
+    localOverrideJson = inputs.editorJson,
+    localOverrideSeedJson = inputs.emmPayloadJson,
     localOverrideActive = localOverrideActive,
-    localOverrideSeededFromEmmPayload = inputs.localOverrideSeededFromEmmPayload,
-    localOverrideFormat = inputs.localOverrideFormat ?: "None",
+    localOverrideSeededFromEmmPayload = inputs.emmPayloadAvailable,
+    localOverrideFormat = inputs.editorFormat ?: "None",
+    localAppliedFormat = inputs.appliedOverrideFormat ?: "None",
     localShapeHighlights = inputs.localShapeHighlights,
+    localOverrideMatchesEmmPayload = inputs.editorMatchesEmmPayload,
+    localOverrideUnappliedChanges = inputs.editorHasUnappliedChanges,
     keyedAppStatesStatus = inputs.keyedAppStatesStatus,
     keyedAppStatesUpdatedAt = inputs.keyedAppStatesUpdatedAt,
     importableAppsLoading = inputs.importableAppsLoading,

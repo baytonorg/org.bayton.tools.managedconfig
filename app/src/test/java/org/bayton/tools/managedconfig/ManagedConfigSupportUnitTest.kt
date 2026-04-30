@@ -38,8 +38,9 @@ class ManagedConfigSupportUnitTest {
           rawManagedRestrictions = Bundle(),
           managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
           managedShapeHighlights = emptyList(),
-          localOverrideJson = """{"my_bundle_array_key":[{"my_bool_key_in_bundle_array":true}]}""",
-          localOverrideFormat = OverrideFormat.UNFLATTENED.label,
+          editorJson = """{"my_bundle_array_key":[{"my_bool_key_in_bundle_array":true}]}""",
+          editorFormat = OverrideFormat.UNFLATTENED.label,
+          appliedOverrideFormat = OverrideFormat.UNFLATTENED.label,
           localShapeHighlights = listOf("my_bundle_array_key: no item wrapper key"),
           keyedAppStatesStatus = "No keyed app states reported yet",
           keyedAppStatesUpdatedAt = "",
@@ -73,8 +74,9 @@ class ManagedConfigSupportUnitTest {
           rawManagedRestrictions = managedBundle,
           managedRuntimeStructure = RuntimeManagedConfigStructure.CANONICAL.label,
           managedShapeHighlights = emptyList(),
-          localOverrideJson = """{"extra_key":"local"}""",
-          localOverrideFormat = OverrideFormat.UNFLATTENED.label,
+          editorJson = """{"extra_key":"local"}""",
+          editorFormat = OverrideFormat.UNFLATTENED.label,
+          appliedOverrideFormat = OverrideFormat.UNFLATTENED.label,
           localShapeHighlights = emptyList(),
           keyedAppStatesStatus = "No keyed app states reported yet",
           keyedAppStatesUpdatedAt = "",
@@ -352,7 +354,7 @@ class ManagedConfigSupportUnitTest {
   }
 
   @Test
-  fun buildUiStateMarksLocalOverrideInactiveWhenThereIsAnError() {
+  fun buildUiStateKeepsLocalOverrideActiveWhenAppliedPayloadExistsAndDraftHasAnError() {
     val uiState =
       buildUiState(
         UiStateInputs(
@@ -361,8 +363,10 @@ class ManagedConfigSupportUnitTest {
           rawManagedRestrictions = Bundle(),
           managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
           managedShapeHighlights = emptyList(),
-          localOverrideJson = """{"my_string_key":"broken"}""",
-          localOverrideFormat = OverrideFormat.INVALID.label,
+          editorJson = """{"my_string_key":"broken"}""",
+          localOverrideApplied = true,
+          editorFormat = OverrideFormat.INVALID.label,
+          appliedOverrideFormat = OverrideFormat.UNFLATTENED.label,
           localShapeHighlights = emptyList(),
           keyedAppStatesStatus = "Failed",
           keyedAppStatesUpdatedAt = "",
@@ -371,8 +375,70 @@ class ManagedConfigSupportUnitTest {
         ),
       )
 
-    assertFalse(uiState.localOverrideActive)
+    assertTrue(uiState.localOverrideActive)
     assertEquals("Parse failed", uiState.localOverrideError)
+  }
+
+  @Test
+  fun buildUiStateMarksExplicitEmptyOverrideActiveWhenSeededFromEmmPayload() {
+    val managedBundle =
+      Bundle().apply {
+        putBoolean("my_bool_key", true)
+      }
+
+    val uiState =
+      buildUiState(
+        UiStateInputs(
+          effectiveRestrictions = Bundle(),
+          managedRestrictions = managedBundle,
+          rawManagedRestrictions = managedBundle,
+          managedRuntimeStructure = RuntimeManagedConfigStructure.CANONICAL.label,
+          managedShapeHighlights = emptyList(),
+          editorJson = "",
+          emmPayloadJson = """{"my_bool_key":true}""",
+          emmPayloadAvailable = true,
+          localOverrideApplied = true,
+          editorFormat = OverrideFormat.EMPTY.label,
+          appliedOverrideFormat = OverrideFormat.EMPTY.label,
+          localShapeHighlights = emptyList(),
+          editorHasUnappliedChanges = true,
+          keyedAppStatesStatus = "Reported",
+          keyedAppStatesUpdatedAt = "",
+          source = "Unit test",
+        ),
+      )
+
+    assertTrue(uiState.localOverrideActive)
+    assertEquals(OverrideFormat.EMPTY.label, uiState.localOverrideFormat)
+    assertTrue(uiState.localOverrideUnappliedChanges)
+    assertEquals(0, uiState.localValidationConfiguredCount)
+  }
+
+  @Test
+  fun buildUiStateMarksEditorAsMatchingEmmPayload() {
+    val uiState =
+      buildUiState(
+        UiStateInputs(
+          effectiveRestrictions = Bundle(),
+          managedRestrictions = Bundle(),
+          rawManagedRestrictions = Bundle(),
+          managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
+          managedShapeHighlights = emptyList(),
+          editorJson = """{"my_bool_key":true}""",
+          emmPayloadJson = """{"my_bool_key":true}""",
+          emmPayloadAvailable = true,
+          editorFormat = OverrideFormat.UNFLATTENED.label,
+          appliedOverrideFormat = OverrideFormat.EMPTY.label,
+          localShapeHighlights = emptyList(),
+          editorMatchesEmmPayload = true,
+          keyedAppStatesStatus = "Reported",
+          keyedAppStatesUpdatedAt = "",
+          source = "Unit test",
+        ),
+      )
+
+    assertTrue(uiState.localOverrideMatchesEmmPayload)
+    assertFalse(uiState.localOverrideUnappliedChanges)
   }
 
   @Test
@@ -444,8 +510,9 @@ class ManagedConfigSupportUnitTest {
           rawManagedRestrictions = Bundle(),
           managedRuntimeStructure = RuntimeManagedConfigStructure.EMPTY.label,
           managedShapeHighlights = emptyList(),
-          localOverrideJson = "{}",
-          localOverrideFormat = parsed.format.label,
+          editorJson = "{}",
+          editorFormat = parsed.format.label,
+          appliedOverrideFormat = parsed.format.label,
           localShapeHighlights = listOf("my_bundle_array_key: wrapper key my_bundle_array_item"),
           keyedAppStatesStatus = "No keyed app states reported yet",
           keyedAppStatesUpdatedAt = "",

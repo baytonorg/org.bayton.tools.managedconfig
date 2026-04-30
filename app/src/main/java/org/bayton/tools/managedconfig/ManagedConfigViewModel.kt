@@ -1,13 +1,15 @@
 package org.bayton.tools.managedconfig
 
 import android.content.RestrictionEntry
-import android.content.Intent
 import android.os.Bundle
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -24,12 +26,18 @@ class ManagedConfigViewModel(
   private val currentPackageName: String,
   private val isDebuggable: Boolean,
   private val savedStateHandle: SavedStateHandle,
+  private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
-  private var currentOverrideJson: String? = savedStateHandle[STATE_LOCAL_OVERRIDE_JSON]
+  private var currentEditorJson: String = savedStateHandle[STATE_LOCAL_EDITOR_JSON] ?: ""
+  private var currentEmmPayloadAvailable: Boolean = savedStateHandle[STATE_LOCAL_OVERRIDE_EMM_AVAILABLE] ?: false
   private var currentEmmSeedJson: String? = savedStateHandle[STATE_LOCAL_OVERRIDE_SEED_JSON]
-  private var currentParsedOverride: ParsedOverride? = null
+  private var currentAppliedOverrideJson: String? = savedStateHandle[STATE_APPLIED_OVERRIDE_JSON]
+  private var currentAppliedOverridePresent: Boolean = savedStateHandle[STATE_APPLIED_OVERRIDE_PRESENT] ?: false
+  private var currentParsedOverride: ParsedOverride? = restoreAppliedOverride()
+  private var currentEditorError: String? = null
   private var lastReportedManagedSignature: String? = null
+  private var feedbackPublishInFlightSignature: String? = null
   private var lastFeedbackStatusMessage: String = "No keyed app states reported yet"
   private var lastFeedbackUpdatedAt: String = ""
   private var availableSchemaApps: List<InstalledAppOption> = emptyList()
@@ -38,7 +46,12 @@ class ManagedConfigViewModel(
   private var importedSchemaError: String? = null
   private var importableAppsLoading = false
   private var importedSchemaLoading = false
+  private var importSchemaJob: Job? = null
   private var initialized = false
+  private var currentManagedRestrictions: Bundle = Bundle()
+  private var currentRawManagedRestrictions: Bundle = Bundle()
+  private var currentManagedRuntimeStructure: String = "No managed payload"
+  private var currentManagedShapeHighlights: List<String> = emptyList()
 
   private val _uiState = MutableStateFlow(ManagedConfigUiState())
   val uiState: StateFlow<ManagedConfigUiState> = _uiState.asStateFlow()
@@ -51,132 +64,173 @@ class ManagedConfigViewModel(
     initialized = true
     importableAppsLoading = true
     val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
-    val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
-    rebuildUiState(
-      source = "App start",
-      effectiveRestrictions = currentParsedOverride?.bundle ?: Bundle(),
-      managedRestrictions = normalizedManagedConfig.normalizedBundle,
-      rawManagedRestrictions = rawManagedRestrictions,
-      managedRuntimeStructure = normalizedManagedConfig.structure.label,
-      managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-      localOverrideFormat = currentParsedOverride?.format?.label,
-      localShapeHighlights = currentParsedOverride?.shapeHighlights?.map(::formatBundleArrayShapeHighlight).orEmpty(),
-    )
+    cacheManagedRuntimeState(rawManagedRestrictions)
+    rebuildCurrentUiState("App start")
     viewModelScope.launch {
-      availableSchemaApps = withContext(Dispatchers.IO) { installedAppsRepository.listApps() }
+      availableSchemaApps = withContext(ioDispatcher) { installedAppsRepository.listApps() }
       importableAppsLoading = false
       val restoredPackage = savedStateHandle.get<String>(STATE_SELECTED_IMPORTED_PACKAGE)?.takeIf { it.isNotBlank() }
-      val restoredOverride = currentOverrideJson?.takeIf { it.isNotBlank() }
       if (restoredPackage != null) {
-        importSchemaForPackage(
-          restoredPackage,
+        launchSchemaImport(
+          packageName = restoredPackage,
           source = "Restored validation target",
-          seedEditorFromFetchedPayload = restoredOverride.isNullOrBlank(),
+          resetLocalValidation = false,
         )
-      }
-      if (!restoredOverride.isNullOrBlank()) {
-        applyLocalOverride(restoredOverride, "Restored validation input")
       } else {
-        refreshRestrictions("App start")
+        rebuildCurrentUiState("App start")
       }
     }
   }
 
-  fun handleIncomingIntent(intent: Intent?) {
-    val json = intent?.getStringExtra(EXTRA_MANAGED_CONFIG_JSON) ?: return
-    intent.removeExtra(EXTRA_MANAGED_CONFIG_JSON)
+  fun refreshImportedAppsAndSelectedSchema(
+    changedPackageName: String? = null,
+    source: String = "Installed apps changed",
+  ) {
+    viewModelScope.launch {
+      importableAppsLoading = true
+      rebuildCurrentUiState(source)
+      availableSchemaApps = withContext(ioDispatcher) { installedAppsRepository.listApps() }
+      importableAppsLoading = false
+      val selectedPackage = selectedImportedApp?.packageName
+      if (selectedPackage != null && (changedPackageName == null || changedPackageName == selectedPackage)) {
+        launchSchemaImport(
+          packageName = selectedPackage,
+          source = source,
+          resetLocalValidation = false,
+        )
+      } else {
+        rebuildCurrentUiState(source)
+      }
+    }
+  }
+
+  fun applyIncomingManagedConfigJson(
+    json: String,
+    source: String = "Debug intent injection",
+  ) {
     if (!isDebuggable) {
       refreshRestrictions("Ignored external test injection in non-debug build")
       return
     }
-    applyLocalOverride(json, "Debug intent injection")
+    applyExternalOverride(json, source)
   }
 
   fun refreshRestrictions(source: String) {
     val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
-    val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
-    val managedRestrictions = normalizedManagedConfig.normalizedBundle
+    cacheManagedRuntimeState(rawManagedRestrictions)
     reportManagedConfigFeedbackIfNeeded(rawManagedRestrictions)
-    val localSimulationRestrictions = currentParsedOverride?.bundle ?: Bundle()
-    rebuildUiState(
+    rebuildCurrentUiState(source)
+  }
+
+  fun updateEditorJson(rawJson: String) {
+    currentEditorJson = rawJson
+    savedStateHandle[STATE_LOCAL_EDITOR_JSON] = rawJson
+    currentEditorError = null
+    rebuildCurrentUiState(_uiState.value.source)
+  }
+
+  fun applyCurrentEditor(source: String = "Local override") {
+    val normalized = currentEditorJson.trim()
+    currentEditorError = null
+    if (normalized.isEmpty()) {
+      applyEmptyLocalOverride(source)
+      return
+    }
+
+    applyParsedOverride(
+      normalized = normalized,
       source = source,
-      effectiveRestrictions = localSimulationRestrictions,
-      managedRestrictions = managedRestrictions,
-      rawManagedRestrictions = rawManagedRestrictions,
-      managedRuntimeStructure = normalizedManagedConfig.structure.label,
-      managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-      localOverrideFormat = currentParsedOverride?.format?.label,
-      localShapeHighlights = currentParsedOverride?.shapeHighlights?.map(::formatBundleArrayShapeHighlight).orEmpty(),
+      parseFailureMessageSuffix = "Applied payload unchanged.",
     )
   }
 
-  fun applyLocalOverride(
+  private fun applyExternalOverride(
     rawJson: String,
-    source: String = "Local override",
+    source: String,
   ) {
     val normalized = rawJson.trim()
+    currentEditorError = null
     if (normalized.isEmpty()) {
-      clearLocalOverride("$source cleared")
+      applyEmptyLocalOverride(source)
       return
+    }
+
+    applyParsedOverride(
+      normalized = normalized,
+      source = source,
+      parseFailureMessageSuffix = "Applied payload unchanged.",
+      updateEditor = false,
+    )
+  }
+
+  private fun applyParsedOverride(
+    normalized: String,
+    source: String,
+    parseFailureMessageSuffix: String,
+    updateEditor: Boolean = true,
+  ) {
+    if (updateEditor) {
+      currentEditorJson = normalized
+      savedStateHandle[STATE_LOCAL_EDITOR_JSON] = normalized
     }
 
     runCatching { parseJsonBundle(normalized) }
       .onSuccess { parsedOverride ->
-        currentOverrideJson = normalized
-        savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = normalized
+        currentAppliedOverridePresent = true
+        savedStateHandle[STATE_APPLIED_OVERRIDE_PRESENT] = true
+        currentAppliedOverrideJson = normalized
+        savedStateHandle[STATE_APPLIED_OVERRIDE_JSON] = normalized
         currentParsedOverride = parsedOverride
-        val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
-        val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
-        val managedRestrictions = normalizedManagedConfig.normalizedBundle
-        rebuildUiState(
-          source = source,
-          effectiveRestrictions = parsedOverride.bundle,
-          managedRestrictions = managedRestrictions,
-          rawManagedRestrictions = rawManagedRestrictions,
-          managedRuntimeStructure = normalizedManagedConfig.structure.label,
-          managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-          localOverrideFormat = parsedOverride.format.label,
-          localShapeHighlights = parsedOverride.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-        )
+        rebuildCurrentUiState(source)
       }.onFailure { error ->
-        currentOverrideJson = normalized
-        savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = normalized
-        currentParsedOverride = null
-        val rawManagedRestrictions = managedConfigRepository.currentRestrictions()
-        val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
-        val managedRestrictions = normalizedManagedConfig.normalizedBundle
-        rebuildUiState(
-          source = source,
-          effectiveRestrictions = Bundle(),
-          managedRestrictions = managedRestrictions,
-          rawManagedRestrictions = rawManagedRestrictions,
-          managedRuntimeStructure = normalizedManagedConfig.structure.label,
-          managedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight),
-          localOverrideFormat = detectOverrideFormat(normalized).label,
-          localShapeHighlights = emptyList(),
-          localOverrideError = error.message ?: "Failed to parse local override JSON.",
-        )
+        currentEditorError = "${error.message ?: "Failed to parse local override JSON."} $parseFailureMessageSuffix"
+        rebuildCurrentUiState(source)
       }
   }
 
-  fun clearLocalOverride(source: String = "Local override cleared") {
-    if (currentEmmSeedJson != null) {
-      restoreEmmSeedPayload(source)
-      return
+  private fun applyEmptyLocalOverride(source: String) {
+    val parsedOverride = ParsedOverride(Bundle(), OverrideFormat.EMPTY)
+    currentAppliedOverridePresent = true
+    savedStateHandle[STATE_APPLIED_OVERRIDE_PRESENT] = true
+    currentAppliedOverrideJson = ""
+    savedStateHandle[STATE_APPLIED_OVERRIDE_JSON] = ""
+    currentParsedOverride = parsedOverride
+    rebuildCurrentUiState(source)
+  }
+
+  fun clearEditor(source: String = "Validation editor cleared") {
+    currentEditorJson = ""
+    savedStateHandle[STATE_LOCAL_EDITOR_JSON] = ""
+    currentEditorError = null
+    rebuildCurrentUiState(source)
+  }
+
+  fun loadEmmPayloadIntoEditor(source: String = "EMM payload loaded into editor") {
+    val packageName = selectedImportedApp?.packageName ?: return
+    if (!currentEmmPayloadAvailable) return
+    viewModelScope.launch {
+      val fetchResult = withContext(ioDispatcher) { managedConfigRepository.fetchManagedRestrictions(packageName) }
+      applyFetchedManagedRestrictionsSeed(fetchResult)
+      val seedJson = currentEmmSeedJson ?: run {
+        rebuildCurrentUiState(source)
+        return@launch
+      }
+      currentEditorJson = seedJson
+      savedStateHandle[STATE_LOCAL_EDITOR_JSON] = seedJson
+      currentEditorError = null
+      rebuildCurrentUiState(source)
     }
-    currentOverrideJson = null
-    savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = null
-    currentParsedOverride = null
-    refreshRestrictions(source)
   }
 
   fun selectImportedSchemaPackage(
     packageName: String,
     source: String = "Imported schema selected",
   ) {
-    viewModelScope.launch {
-      importSchemaForPackage(packageName, source)
-    }
+    launchSchemaImport(
+      packageName = packageName,
+      source = source,
+      resetLocalValidation = selectedImportedApp?.packageName != packageName && selectedImportedApp != null,
+    )
   }
 
   fun loadSampleOverride() {
@@ -200,39 +254,84 @@ class ManagedConfigViewModel(
     source: String,
     toastMessage: String,
   ) {
-    viewModelScope.launch {
-      if (selectedImportedApp?.packageName != currentPackageName) {
-        importSchemaForPackage(currentPackageName, source = "Imported schema selected")
+    if (selectedImportedApp?.packageName != currentPackageName) {
+      launchSchemaImport(
+        packageName = currentPackageName,
+        source = "Imported schema selected",
+        resetLocalValidation = selectedImportedApp != null,
+      ) {
+        loadSampleIntoEditor(sampleJson, source, toastMessage)
       }
-      applyLocalOverride(sampleJson, source)
-      _uiEvents.emit(ManagedConfigUiEvent.ToastMessage(toastMessage))
+      return
     }
+    viewModelScope.launch {
+      loadSampleIntoEditor(sampleJson, source, toastMessage)
+    }
+  }
+
+  private fun launchSchemaImport(
+    packageName: String,
+    source: String,
+    resetLocalValidation: Boolean,
+    afterImport: (suspend () -> Unit)? = null,
+  ) {
+    val previousJob = importSchemaJob
+    importSchemaJob =
+      viewModelScope.launch {
+        previousJob?.cancelAndJoin()
+        if (resetLocalValidation) {
+          resetLocalValidationState()
+        }
+        importSchemaForPackage(packageName, source)
+        afterImport?.invoke()
+      }
+  }
+
+  private suspend fun loadSampleIntoEditor(
+    sampleJson: String,
+    source: String,
+    toastMessage: String,
+  ) {
+    currentEditorJson = sampleJson
+    savedStateHandle[STATE_LOCAL_EDITOR_JSON] = sampleJson
+    currentEditorError = null
+    rebuildCurrentUiState(source)
+    _uiEvents.emit(ManagedConfigUiEvent.ToastMessage(toastMessage))
   }
 
   private suspend fun importSchemaForPackage(
     packageName: String,
     source: String,
-    seedEditorFromFetchedPayload: Boolean = true,
   ) {
+    val wasSelectedPackage = selectedImportedApp?.packageName == packageName
     importedSchemaLoading = true
     importedSchemaError = null
-    refreshRestrictions("Loading imported schema")
+    currentEmmPayloadAvailable = false
+    savedStateHandle[STATE_LOCAL_OVERRIDE_EMM_AVAILABLE] = false
+    currentEmmSeedJson = null
+    savedStateHandle[STATE_LOCAL_OVERRIDE_SEED_JSON] = null
+    rebuildCurrentUiState("Loading imported schema")
 
     val selectedApp =
       availableSchemaApps.firstOrNull { it.packageName == packageName }
-        ?: withContext(Dispatchers.IO) { installedAppsRepository.findApp(packageName) }
+        ?: withContext(ioDispatcher) { installedAppsRepository.findApp(packageName) }
 
     if (selectedApp == null) {
+      selectedImportedApp = null
+      savedStateHandle[STATE_SELECTED_IMPORTED_PACKAGE] = null
       importedSchemaDefinitions = emptyList()
       importedSchemaLoading = false
       importedSchemaError = "Unable to find installed app: $packageName"
-      refreshRestrictions("Imported schema import failed")
+      rebuildCurrentUiState("Imported schema import failed")
+      if (wasSelectedPackage) {
+        _uiEvents.emit(ManagedConfigUiEvent.ToastMessage("Selected app removed"))
+      }
       return
     }
 
     selectedImportedApp = selectedApp
     runCatching<List<ManagedConfigDefinition>> {
-      withContext(Dispatchers.IO) {
+      withContext(ioDispatcher) {
         managedConfigRepository
           .importSchema(packageName)
           .flatMap(RestrictionEntry::toManagedConfigDefinitions)
@@ -246,24 +345,23 @@ class ManagedConfigViewModel(
         } else {
           null
         }
-      val managedRestrictionsFetch =
-        withContext(Dispatchers.IO) { managedConfigRepository.fetchManagedRestrictions(packageName) }
+      val managedRestrictionsPresenceProbe =
+        withContext(ioDispatcher) { managedConfigRepository.fetchManagedRestrictions(packageName) }
+      currentEmmPayloadAvailable =
+        managedRestrictionsPresenceProbe.isAvailable && !managedRestrictionsPresenceProbe.bundle.isEmpty
+      savedStateHandle[STATE_LOCAL_OVERRIDE_EMM_AVAILABLE] = currentEmmPayloadAvailable
+      applyFetchedManagedRestrictionsSeed(managedRestrictionsPresenceProbe)
       importedSchemaLoading = false
-      applyFetchedManagedRestrictionsSeed(
-        fetchResult = managedRestrictionsFetch,
-        source = source,
-        seedEditorFromFetchedPayload = seedEditorFromFetchedPayload,
-      )
+      rebuildCurrentUiState(source)
     }.onFailure { error ->
       importedSchemaDefinitions = emptyList()
       importedSchemaLoading = false
+      currentEmmPayloadAvailable = false
+      savedStateHandle[STATE_LOCAL_OVERRIDE_EMM_AVAILABLE] = false
       currentEmmSeedJson = null
       savedStateHandle[STATE_LOCAL_OVERRIDE_SEED_JSON] = null
-      currentOverrideJson = null
-      savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = null
-      currentParsedOverride = null
       importedSchemaError = "Unable to import schema from ${selectedApp.packageName}: ${error.message ?: "unknown error"}"
-      refreshRestrictions("Imported schema import failed")
+      rebuildCurrentUiState("Imported schema import failed")
     }
   }
 
@@ -271,16 +369,19 @@ class ManagedConfigViewModel(
     if (managedRestrictions.isEmpty) {
       if (lastReportedManagedSignature != null) {
         val states = buildManagedConfigFeedbackStates(Bundle(), managedConfigDefinitions)
-        val timestamp = nowTimestamp()
-        runCatching { keyedAppStatesPublisher.publish(states) }
-          .onSuccess {
+        if (feedbackPublishInFlightSignature == EMPTY_MANAGED_CONFIG_SIGNATURE) return
+        feedbackPublishInFlightSignature = EMPTY_MANAGED_CONFIG_SIGNATURE
+        publishKeyedAppStatesAsync(
+          states = states,
+          inFlightSignature = EMPTY_MANAGED_CONFIG_SIGNATURE,
+          onSuccess = {
             lastReportedManagedSignature = EMPTY_MANAGED_CONFIG_SIGNATURE
             lastFeedbackStatusMessage = "Cleared keyed app states from the Android Enterprise feedback channel."
-            lastFeedbackUpdatedAt = timestamp
-          }.onFailure { error ->
+          },
+          onFailure = { error ->
             lastFeedbackStatusMessage = "Failed to clear keyed app states: ${error.message ?: "unknown error"}"
-            lastFeedbackUpdatedAt = timestamp
-          }
+          },
+        )
       } else {
         lastFeedbackStatusMessage = "No keyed app states reported yet"
         lastFeedbackUpdatedAt = ""
@@ -289,19 +390,21 @@ class ManagedConfigViewModel(
     }
 
     val signature = feedbackSignature(managedRestrictions)
-    if (signature == lastReportedManagedSignature) return
+    if (signature == lastReportedManagedSignature || signature == feedbackPublishInFlightSignature) return
 
     val states = buildManagedConfigFeedbackStates(managedRestrictions, managedConfigDefinitions)
-    val timestamp = nowTimestamp()
-    runCatching { keyedAppStatesPublisher.publish(states) }
-      .onSuccess {
+    feedbackPublishInFlightSignature = signature
+    publishKeyedAppStatesAsync(
+      states = states,
+      inFlightSignature = signature,
+      onSuccess = {
         lastReportedManagedSignature = signature
         lastFeedbackStatusMessage = "Reported ${states.size} keyed app states to the Android Enterprise feedback channel."
-        lastFeedbackUpdatedAt = timestamp
-      }.onFailure { error ->
+      },
+      onFailure = { error ->
         lastFeedbackStatusMessage = "Failed to report keyed app states: ${error.message ?: "unknown error"}"
-        lastFeedbackUpdatedAt = timestamp
-      }
+      },
+    )
   }
 
   private fun rebuildUiState(
@@ -311,7 +414,8 @@ class ManagedConfigViewModel(
     rawManagedRestrictions: Bundle,
     managedRuntimeStructure: String,
     managedShapeHighlights: List<String>,
-    localOverrideFormat: String?,
+    editorFormat: String?,
+    appliedOverrideFormat: String?,
     localShapeHighlights: List<String>,
     localOverrideError: String? = null,
   ) {
@@ -323,11 +427,15 @@ class ManagedConfigViewModel(
           rawManagedRestrictions = rawManagedRestrictions,
           managedRuntimeStructure = managedRuntimeStructure,
           managedShapeHighlights = managedShapeHighlights,
-          localOverrideJson = currentOverrideJson.orEmpty(),
-          localOverrideSeedJson = currentEmmSeedJson,
-          localOverrideSeededFromEmmPayload = currentEmmSeedJson != null,
-          localOverrideFormat = localOverrideFormat,
+          editorJson = currentEditorJson,
+          emmPayloadJson = currentEmmSeedJson,
+          emmPayloadAvailable = currentEmmPayloadAvailable,
+          localOverrideApplied = currentParsedOverride != null,
+          editorFormat = editorFormat,
+          appliedOverrideFormat = appliedOverrideFormat,
           localShapeHighlights = localShapeHighlights,
+          editorMatchesEmmPayload = currentEmmSeedJson?.trim() == currentEditorJson.trim(),
+          editorHasUnappliedChanges = hasUnappliedEditorChanges(),
           keyedAppStatesStatus = lastFeedbackStatusMessage,
           keyedAppStatesUpdatedAt = lastFeedbackUpdatedAt,
           source = source,
@@ -342,39 +450,102 @@ class ManagedConfigViewModel(
       )
   }
 
-  private fun applyFetchedManagedRestrictionsSeed(
-    fetchResult: ManagedRestrictionsFetchResult,
-    source: String,
-    seedEditorFromFetchedPayload: Boolean,
-  ) {
+  private fun applyFetchedManagedRestrictionsSeed(fetchResult: ManagedRestrictionsFetchResult) {
     if (!fetchResult.isAvailable || fetchResult.bundle.isEmpty) {
       currentEmmSeedJson = null
       savedStateHandle[STATE_LOCAL_OVERRIDE_SEED_JSON] = null
-      currentOverrideJson = null
-      savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = null
-      currentParsedOverride = null
-      refreshRestrictions(source)
       return
     }
 
-    val normalizedManagedRestrictions = normalizeRuntimeManagedConfig(fetchResult.bundle).normalizedBundle
-    val seedJson = formatBundleAsStructuredJson(normalizedManagedRestrictions)
+    val seedJson = formatBundleAsStructuredJson(fetchResult.bundle)
     currentEmmSeedJson = seedJson
     savedStateHandle[STATE_LOCAL_OVERRIDE_SEED_JSON] = seedJson
-    if (seedEditorFromFetchedPayload) {
-      currentOverrideJson = seedJson
-      savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = seedJson
-      currentParsedOverride = parseJsonBundleSafely(seedJson)
-    }
-    refreshRestrictions(source)
   }
 
-  private fun restoreEmmSeedPayload(source: String) {
-    val seedJson = currentEmmSeedJson ?: return
-    currentOverrideJson = seedJson
-    savedStateHandle[STATE_LOCAL_OVERRIDE_JSON] = seedJson
-    currentParsedOverride = parseJsonBundleSafely(seedJson)
-    refreshRestrictions(source)
+  private fun hasUnappliedEditorChanges(): Boolean {
+    if (currentAppliedOverridePresent) {
+      return currentEditorJson.trim() != currentAppliedOverrideJson.orEmpty().trim()
+    }
+    return currentEditorJson.isNotBlank()
+  }
+
+  private fun restoreAppliedOverride(): ParsedOverride? {
+    if (!currentAppliedOverridePresent) return null
+    val appliedJson = currentAppliedOverrideJson.orEmpty()
+    return if (appliedJson.isBlank()) {
+      ParsedOverride(Bundle(), OverrideFormat.EMPTY)
+    } else {
+      parseJsonBundleSafely(appliedJson)
+    }
+  }
+
+  private fun resetLocalValidationState() {
+    currentEditorJson = ""
+    savedStateHandle[STATE_LOCAL_EDITOR_JSON] = ""
+    currentEditorError = null
+    currentEmmPayloadAvailable = false
+    savedStateHandle[STATE_LOCAL_OVERRIDE_EMM_AVAILABLE] = false
+    currentEmmSeedJson = null
+    savedStateHandle[STATE_LOCAL_OVERRIDE_SEED_JSON] = null
+    currentAppliedOverrideJson = null
+    savedStateHandle[STATE_APPLIED_OVERRIDE_JSON] = null
+    currentAppliedOverridePresent = false
+    savedStateHandle[STATE_APPLIED_OVERRIDE_PRESENT] = false
+    currentParsedOverride = null
+  }
+
+  private fun publishKeyedAppStatesAsync(
+    states: Collection<androidx.enterprise.feedback.KeyedAppState>,
+    inFlightSignature: String,
+    onSuccess: () -> Unit,
+    onFailure: (Throwable) -> Unit,
+  ) {
+    viewModelScope.launch(ioDispatcher) {
+      val timestamp = nowTimestamp()
+      runCatching { keyedAppStatesPublisher.publish(states) }
+        .onSuccess {
+          withContext(Dispatchers.Main) {
+            if (feedbackPublishInFlightSignature == inFlightSignature) {
+              feedbackPublishInFlightSignature = null
+            }
+            onSuccess()
+            lastFeedbackUpdatedAt = timestamp
+            rebuildCurrentUiState("Feedback updated")
+          }
+        }.onFailure { error ->
+          withContext(Dispatchers.Main) {
+            if (feedbackPublishInFlightSignature == inFlightSignature) {
+              feedbackPublishInFlightSignature = null
+            }
+            onFailure(error)
+            lastFeedbackUpdatedAt = timestamp
+            rebuildCurrentUiState("Feedback updated")
+          }
+        }
+    }
+  }
+
+  private fun rebuildCurrentUiState(source: String) {
+    rebuildUiState(
+      source = source,
+      effectiveRestrictions = currentParsedOverride?.bundle ?: Bundle(),
+      managedRestrictions = currentManagedRestrictions,
+      rawManagedRestrictions = currentRawManagedRestrictions,
+      managedRuntimeStructure = currentManagedRuntimeStructure,
+      managedShapeHighlights = currentManagedShapeHighlights,
+      editorFormat = detectOverrideFormat(currentEditorJson).label,
+      appliedOverrideFormat = currentParsedOverride?.format?.label,
+      localShapeHighlights = currentParsedOverride?.shapeHighlights?.map(::formatBundleArrayShapeHighlight).orEmpty(),
+      localOverrideError = currentEditorError,
+    )
+  }
+
+  private fun cacheManagedRuntimeState(rawManagedRestrictions: Bundle) {
+    val normalizedManagedConfig = normalizeRuntimeManagedConfig(rawManagedRestrictions)
+    currentRawManagedRestrictions = rawManagedRestrictions
+    currentManagedRestrictions = normalizedManagedConfig.normalizedBundle
+    currentManagedRuntimeStructure = normalizedManagedConfig.structure.label
+    currentManagedShapeHighlights = normalizedManagedConfig.shapeHighlights.map(::formatBundleArrayShapeHighlight)
   }
 
   class Factory(
@@ -384,6 +555,7 @@ class ManagedConfigViewModel(
     private val currentPackageName: String,
     private val isDebuggable: Boolean,
     private val savedStateHandle: SavedStateHandle,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
   ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -394,10 +566,14 @@ class ManagedConfigViewModel(
         currentPackageName = currentPackageName,
         isDebuggable = isDebuggable,
         savedStateHandle = savedStateHandle,
+        ioDispatcher = ioDispatcher,
       ) as T
   }
 }
 
 private const val STATE_SELECTED_IMPORTED_PACKAGE = "state_selected_imported_package"
-private const val STATE_LOCAL_OVERRIDE_JSON = "state_local_override_json"
+private const val STATE_LOCAL_EDITOR_JSON = "state_local_editor_json"
+private const val STATE_LOCAL_OVERRIDE_EMM_AVAILABLE = "state_local_override_emm_available"
 private const val STATE_LOCAL_OVERRIDE_SEED_JSON = "state_local_override_seed_json"
+private const val STATE_APPLIED_OVERRIDE_JSON = "state_applied_override_json"
+private const val STATE_APPLIED_OVERRIDE_PRESENT = "state_applied_override_present"

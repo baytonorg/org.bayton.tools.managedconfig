@@ -27,8 +27,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -66,6 +68,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.bayton.tools.managedconfig.theme.BaytonManagedConfigTheme
+import org.bayton.tools.managedconfig.theme.BaytonGreen
 import kotlinx.coroutines.launch
 import android.widget.ImageView
 
@@ -77,14 +80,15 @@ private const val LOCAL_SIMULATION_TAB = 1
 fun ManagedConfigScreen(
   uiState: ManagedConfigUiState,
   knownConfigs: List<ManagedConfigDefinition>,
-  onApplyLocalOverride: (String) -> Unit,
+  onEditorValueChange: (String) -> Unit,
+  onApplyLocalOverride: () -> Unit,
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
   onLoadInvalidSampleOverride: () -> Unit,
+  onLoadEmmPayload: () -> Unit,
   onSelectImportedSchemaPackage: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  var editorValue by remember(uiState.localOverrideJson) { mutableStateOf(uiState.localOverrideJson) }
   val pagerState = rememberPagerState(initialPage = RESTRICTIONS_MANAGER_TAB, pageCount = { 2 })
   val coroutineScope = rememberCoroutineScope()
 
@@ -133,15 +137,12 @@ fun ManagedConfigScreen(
           LOCAL_SIMULATION_TAB ->
             LocalSimulationPage(
               uiState = uiState,
-              editorValue = editorValue,
-              onEditorValueChange = { editorValue = it },
-              onApplyLocalOverride = { onApplyLocalOverride(editorValue) },
-              onClearLocalOverride = {
-                editorValue = ""
-                onClearLocalOverride()
-              },
+              onEditorValueChange = onEditorValueChange,
+              onApplyLocalOverride = onApplyLocalOverride,
+              onClearLocalOverride = onClearLocalOverride,
               onLoadSampleOverride = onLoadSampleOverride,
               onLoadInvalidSampleOverride = onLoadInvalidSampleOverride,
+              onLoadEmmPayload = onLoadEmmPayload,
               onSelectImportedSchemaPackage = onSelectImportedSchemaPackage,
             )
 
@@ -346,12 +347,12 @@ private fun RestrictionsManagerPage(
 @Composable
 private fun LocalSimulationPage(
   uiState: ManagedConfigUiState,
-  editorValue: String,
   onEditorValueChange: (String) -> Unit,
   onApplyLocalOverride: () -> Unit,
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
   onLoadInvalidSampleOverride: () -> Unit,
+  onLoadEmmPayload: () -> Unit,
   onSelectImportedSchemaPackage: (String) -> Unit,
 ) {
   val listState = rememberLazyListState()
@@ -376,14 +377,14 @@ private fun LocalSimulationPage(
       item {
         PageIntroCard(
           title = "Local validation",
-          body = "Import an installed app schema, apply local JSON, and compare how different JSON shapes reconstruct into Android-style Bundle / Parcelable data without involving an EMM.",
+          body = "Import an installed app schema, apply local JSON, and compare how different JSON shapes reconstruct into Android-style Bundle / Parcelable data independent of an EMM. With delegated scopes applied, the EMM-derived configuration for an app will also be available for import.",
         )
       }
 
       item {
         LocalSimulationStatusCard(
           localOverrideActive = uiState.localOverrideActive,
-          localOverrideFormat = uiState.localOverrideFormat,
+          localAppliedFormat = uiState.localAppliedFormat,
           importableAppsLoading = uiState.importableAppsLoading,
           importedSchemaLoading = uiState.importedSchemaLoading,
           selectedImportedAppLabel = uiState.selectedImportedAppLabel,
@@ -407,15 +408,18 @@ private fun LocalSimulationPage(
 
       item {
         LocalOverrideCard(
-          editorValue = editorValue,
+          editorValue = uiState.localOverrideJson,
           onEditorValueChange = onEditorValueChange,
           onApplyLocalOverride = onApplyLocalOverride,
           onClearLocalOverride = onClearLocalOverride,
           onLoadSampleOverride = onLoadSampleOverride,
           onLoadInvalidSampleOverride = onLoadInvalidSampleOverride,
+          onLoadEmmPayload = onLoadEmmPayload,
           seedJson = uiState.localOverrideSeedJson,
           seededFromEmmPayload = uiState.localOverrideSeededFromEmmPayload,
+          editorMatchesEmmPayload = uiState.localOverrideMatchesEmmPayload,
           localOverrideFormat = uiState.localOverrideFormat,
+          hasUnappliedChanges = uiState.localOverrideUnappliedChanges,
           error = uiState.localOverrideError,
         )
       }
@@ -536,7 +540,7 @@ private fun RestrictionsManagerStatusCard(
 @Composable
 private fun LocalSimulationStatusCard(
   localOverrideActive: Boolean,
-  localOverrideFormat: String,
+  localAppliedFormat: String,
   importableAppsLoading: Boolean,
   importedSchemaLoading: Boolean,
   selectedImportedAppLabel: String?,
@@ -594,7 +598,7 @@ private fun LocalSimulationStatusCard(
       )
       DashboardLine(
         label = "Shape",
-        value = localOverrideFormat,
+        value = localAppliedFormat,
         contentColor = contentColor,
       )
       if (!importedSchemaError.isNullOrBlank()) {
@@ -826,16 +830,14 @@ private fun LocalOverrideCard(
   onClearLocalOverride: () -> Unit,
   onLoadSampleOverride: () -> Unit,
   onLoadInvalidSampleOverride: () -> Unit,
+  onLoadEmmPayload: () -> Unit,
   seedJson: String?,
   seededFromEmmPayload: Boolean,
+  editorMatchesEmmPayload: Boolean,
   localOverrideFormat: String,
+  hasUnappliedChanges: Boolean,
   error: String?,
 ) {
-  val isOverridden =
-    seededFromEmmPayload &&
-      seedJson != null &&
-      editorValue.trim() != seedJson.trim()
-
   Card(
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     shape = RoundedCornerShape(20.dp),
@@ -860,22 +862,22 @@ private fun LocalOverrideCard(
             enabled = false,
             label = {
               Text(
-                text = if (isOverridden) "Overridden" else "EMM payload",
+                text = "EMM payload",
                 fontFamily = FontFamily.Monospace,
               )
             },
             colors =
               AssistChipDefaults.assistChipColors(
                 disabledContainerColor =
-                  if (isOverridden) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                  if (seedJson != null && editorMatchesEmmPayload) BaytonGreen.copy(alpha = 0.16f) else MaterialTheme.colorScheme.secondaryContainer,
                 disabledLabelColor =
-                  if (isOverridden) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+                  if (seedJson != null && editorMatchesEmmPayload) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSecondaryContainer,
               ),
           )
         }
       }
       Text(
-        text = "Paste JSON here to validate app restrictions locally for QA. Google runtime managed config reaches the app as unflattened Bundle / Parcelable data. This validator accepts either unflattened nested JSON or flattened keys such as my_bundle_key.my_string_key_in_bundle and my_bundle_array_key[0].my_string_key_in_bundle_array.",
+        text = "Add or edit JSON here to validate config application locally. Changes here will not affect the target app in any way, this is purely used to visualise how the JSON config maps to the app-supported restrictions. ",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
       )
@@ -905,21 +907,47 @@ private fun LocalOverrideCard(
           color = MaterialTheme.colorScheme.error,
         )
       }
+      if (hasUnappliedChanges) {
+        Text(
+          text = "Editor has unapplied changes",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.error,
+        )
+      }
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Button(onClick = onApplyLocalOverride) {
-          Text("Apply")
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          LongPressTextButton(
+            text = "Load sample",
+            onClick = onLoadSampleOverride,
+            onLongClick = onLoadInvalidSampleOverride,
+          )
+          if (seededFromEmmPayload) {
+            TextButton(onClick = onLoadEmmPayload) {
+              Text("Load EMM")
+            }
+          }
         }
-        LongPressTextButton(
-          text = "Load sample",
-          onClick = onLoadSampleOverride,
-          onLongClick = onLoadInvalidSampleOverride,
-        )
-        TextButton(onClick = onClearLocalOverride) {
-          Text(if (seededFromEmmPayload) "Reset" else "Clear")
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          IconButton(onClick = onClearLocalOverride) {
+            Icon(
+              imageVector = Icons.Filled.Delete,
+              contentDescription = "Clear editor",
+              tint = MaterialTheme.colorScheme.error,
+            )
+          }
+          Button(onClick = onApplyLocalOverride) {
+            Text("Apply")
+          }
         }
       }
     }
@@ -949,18 +977,6 @@ private fun LongPressTextButton(
       color = MaterialTheme.colorScheme.primary,
     )
   }
-}
-
-@Composable
-private fun PayloadLabel(
-  text: String,
-  color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.secondary,
-) {
-  Text(
-    text = text,
-    style = MaterialTheme.typography.labelLarge,
-    color = color,
-  )
 }
 
 @Composable
@@ -1043,7 +1059,7 @@ private fun TypeChip(typeLabel: String, contentColor: Color) {
 private fun DashboardLine(
   label: String,
   value: String,
-  contentColor: androidx.compose.ui.graphics.Color,
+  contentColor: Color,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -1145,14 +1161,17 @@ private fun ManagedConfigScreenPreview() {
           localOverrideJson = "{\n  \"my_bool_key\": true\n}",
           localOverrideActive = true,
           localOverrideFormat = "Unflattened nested JSON",
+          localAppliedFormat = "Unflattened nested JSON",
           keyedAppStatesStatus = "Reported 9 keyed app states to the Android Enterprise feedback channel.",
           keyedAppStatesUpdatedAt = "2026-04-28 12:34:56",
         ),
       knownConfigs = managedConfigDefinitions,
+      onEditorValueChange = {},
       onApplyLocalOverride = {},
       onClearLocalOverride = {},
       onLoadSampleOverride = {},
       onLoadInvalidSampleOverride = {},
+      onLoadEmmPayload = {},
       onSelectImportedSchemaPackage = {},
     )
   }

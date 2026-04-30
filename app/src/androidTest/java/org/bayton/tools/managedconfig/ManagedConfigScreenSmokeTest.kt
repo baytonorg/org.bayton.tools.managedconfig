@@ -97,6 +97,25 @@ class ManagedConfigScreenSmokeTest {
     )
   }
 
+  @Test
+  fun clearingEditorShowsUnappliedChangesHintWhileAppliedPayloadRemains() {
+    val payload =
+      """
+      {
+        "my_string_key": "from-intent-extra",
+        "my_bool_key": true
+      }
+      """.trimIndent()
+
+    launchMainActivity(managedConfigJson = payload)
+
+    openLocalValidationTab()
+    waitForText("Validation payload active")
+    clickContentDescription("Clear editor")
+    waitForText("Editor has unapplied changes")
+    waitForText("Validation payload active")
+  }
+
   private fun openLocalValidationTab() {
     if (
       device.findObject(By.textContains("Validation target")) != null ||
@@ -186,6 +205,21 @@ class ManagedConfigScreenSmokeTest {
     repeat(3) { attempt ->
       val node = device.wait(Until.findObject(By.textContains(text)), WAIT_TIMEOUT_MS)
       assertNotNull("Expected to find UI text '$text'", node)
+      try {
+        node!!.click()
+        device.waitForIdle()
+        return
+      } catch (error: androidx.test.uiautomator.StaleObjectException) {
+        if (attempt == 2) throw error
+        device.waitForIdle()
+      }
+    }
+  }
+
+  private fun clickContentDescription(description: String) {
+    repeat(3) { attempt ->
+      val node = device.wait(Until.findObject(By.descContains(description)), WAIT_TIMEOUT_MS)
+      assertNotNull("Expected to find UI content description '$description'", node)
       try {
         node!!.click()
         device.waitForIdle()

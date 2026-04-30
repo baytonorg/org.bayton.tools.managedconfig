@@ -46,6 +46,16 @@ class MainActivity : ComponentActivity() {
       }
     }
 
+  private val packageChangedReceiver =
+    object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        managedConfigViewModel.refreshImportedAppsAndSelectedSchema(
+          changedPackageName = intent?.data?.schemeSpecificPart,
+          source = "Package changed broadcast",
+        )
+      }
+    }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
     super.onCreate(savedInstanceState)
@@ -56,7 +66,7 @@ class MainActivity : ComponentActivity() {
     )
 
     managedConfigViewModel.initialize()
-    managedConfigViewModel.handleIncomingIntent(intent)
+    consumeManagedConfigIntent(intent)
 
     setContent {
       val uiState by managedConfigViewModel.uiState.collectAsStateWithLifecycle()
@@ -74,10 +84,12 @@ class MainActivity : ComponentActivity() {
         ManagedConfigScreen(
           uiState = uiState,
           knownConfigs = managedConfigDefinitions,
-          onApplyLocalOverride = managedConfigViewModel::applyLocalOverride,
-          onClearLocalOverride = managedConfigViewModel::clearLocalOverride,
+          onEditorValueChange = managedConfigViewModel::updateEditorJson,
+          onApplyLocalOverride = managedConfigViewModel::applyCurrentEditor,
+          onClearLocalOverride = managedConfigViewModel::clearEditor,
           onLoadSampleOverride = managedConfigViewModel::loadSampleOverride,
           onLoadInvalidSampleOverride = managedConfigViewModel::loadInvalidSampleOverride,
+          onLoadEmmPayload = managedConfigViewModel::loadEmmPayloadIntoEditor,
           onSelectImportedSchemaPackage = managedConfigViewModel::selectImportedSchemaPackage,
         )
       }
@@ -93,6 +105,18 @@ class MainActivity : ComponentActivity() {
         IntentFilter(Intent.ACTION_APPLICATION_RESTRICTIONS_CHANGED),
         ContextCompat.RECEIVER_NOT_EXPORTED,
       )
+      ContextCompat.registerReceiver(
+        this,
+        packageChangedReceiver,
+        IntentFilter().apply {
+          addAction(Intent.ACTION_PACKAGE_ADDED)
+          addAction(Intent.ACTION_PACKAGE_CHANGED)
+          addAction(Intent.ACTION_PACKAGE_REPLACED)
+          addAction(Intent.ACTION_PACKAGE_REMOVED)
+          addDataScheme("package")
+        },
+        ContextCompat.RECEIVER_NOT_EXPORTED,
+      )
       receiverRegistered = true
     }
   }
@@ -105,15 +129,22 @@ class MainActivity : ComponentActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    managedConfigViewModel.handleIncomingIntent(intent)
+    consumeManagedConfigIntent(intent)
   }
 
   override fun onStop() {
     if (receiverRegistered) {
       unregisterReceiver(restrictionsReceiver)
+      unregisterReceiver(packageChangedReceiver)
       receiverRegistered = false
     }
     super.onStop()
+  }
+
+  private fun consumeManagedConfigIntent(intent: Intent?) {
+    val json = intent?.getStringExtra(EXTRA_MANAGED_CONFIG_JSON) ?: return
+    intent.removeExtra(EXTRA_MANAGED_CONFIG_JSON)
+    managedConfigViewModel.applyIncomingManagedConfigJson(json)
   }
 }
 
