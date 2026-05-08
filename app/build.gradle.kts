@@ -14,8 +14,8 @@ android {
         applicationId = "org.bayton.tools.managedconfig"
         minSdk = 28
         targetSdk = 37
-        versionCode = 1003
-        versionName = "1.0.0.3"
+        versionCode = 1004
+        versionName = "1.0.0.4"
     }
 
     buildTypes {
